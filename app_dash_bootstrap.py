@@ -33,6 +33,7 @@ req_avail_df = pd.concat([available_df, required_df], ignore_index=True)
 
 # Initialize the app
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+server = app.server  # This exposes the internal Flask server for Render to build
 
 # --- App Layout ---
 app.layout = dbc.Container([
@@ -152,4 +153,5 @@ def update_drilldown_charts(clickData):
 
 # --- Run the App ---
 if __name__ == '__main__':
+
     app.run(debug=True)
