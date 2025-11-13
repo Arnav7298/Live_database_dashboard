@@ -16,15 +16,33 @@ def get_data():
         df = pd.read_csv(CSV_FILE)
         df_populated = df.copy()
         
-        # 2. Clean the data 
+        # 3.START DATA SIMULATION
+        print("Loading from CSV... Simulating practice data...")
+
+        # --- NEW SIMULATION LOGIC ---
+        # Fill NULLs in 'department_name'
+        dept_list = ['Administration', 'Sales', 'Production', 'Store', 'Purchase', 'Quality Assurance', 'Maintenance', 'It / Edp', 'Assembly', 'Housekeeping']
+        dept_null_indices = df_populated[df_populated['department_name'].isnull()].index
+        df_populated.loc[dept_null_indices, 'department_name'] = np.random.choice(dept_list, size=len(dept_null_indices))
+
+        # Fill NULLs in 'gender'
+        gender_list = ['Male', 'Female']
+        gender_null_indices = df_populated[df_populated['gender'].isnull()].index
+        df_populated.loc[gender_null_indices, 'gender'] = np.random.choice(gender_list, size=len(gender_null_indices))
+
+        # Fill NULLs in 'job_title'
+        job_list = ['Developer', 'Manager', 'Hr Admin', 'It Manager', 'Contract Labour - Direct', 'Housekeeper', 'Operator', 'Supervisor', 'Welder', 'Painter']
+        job_null_indices = df_populated[df_populated['job_title'].isnull()].index
+        df_populated.loc[job_null_indices, 'job_title'] = np.random.choice(job_list, size=len(job_null_indices))
+        # --- END NEW SIMULATION ---
+
+        
+        # 2. Clean data (This now cleans the newly populated data)
         df_populated['gender'] = df_populated['gender'].str.title().fillna('Unknown')
         df_populated['job_title'] = df_populated['job_title'].astype(str).str.title().fillna('Not Available')
         df_populated['department_name'] = df_populated['department_name'].astype(str).str.title().fillna('No Department')
-
-        # 3.START DATA SIMULATIONN
-        # (Same logic as test Colab notebook)
         
-        print("Loading from CSV... Simulating practice data...")
+        # --- (Existing simulation logic continues below) ---
         
         # Simulate 'joining_date'
         start_date = pd.to_datetime('2020-01-01')
