@@ -1,5 +1,5 @@
 import dash
-from dash import dcc, html, Input, Output, callback
+from dash import dcc, html, Input, Output, State, callback
 import dash_bootstrap_components as dbc
 import pandas as pd
 from datetime import date
@@ -23,48 +23,72 @@ layout = dbc.Container([
 
     # 2. FILTERS
     dbc.Row([
-        dbc.Col([html.Label("Date Range (For KPIs)"), dcc.DatePickerRange(id='anom-date', min_date_allowed=date(2020, 1, 1), max_date_allowed=date(2030, 12, 31), start_date=date(2025, 11, 15), end_date=date(2025, 11, 30), display_format='Y-MM-DD', className="d-block")], width=4),
+        # --- DATE SECTION START ---
+        dbc.Col([
+            dbc.Row([
+                dbc.Col([html.Label("Filter Mode:")], width=4, className="align-self-center"),
+                dbc.Col([
+                    dcc.RadioItems(
+                        id='date-mode-radio',
+                        options=[{'label': ' Range', 'value': 'range'}, {'label': ' Single', 'value': 'single'}],
+                        value='range',
+                        inline=True,
+                        inputStyle={"margin-right": "5px", "margin-left": "10px"}
+                    )
+                ], width=8)
+            ], className="mb-1"),
+            
+            # Container for Range Picker (Visible by default)
+            html.Div(id='div-date-range', children=[
+                dcc.DatePickerRange(
+                    id='anom-date', 
+                    min_date_allowed=date(2020, 1, 1), max_date_allowed=date(2030, 12, 31), 
+                    start_date=date(2025, 11, 15), end_date=date(2025, 11, 30), 
+                    display_format='Y-MM-DD', className="d-block"
+                )
+            ]),
+
+            # Container for Single Picker (Hidden by default)
+            html.Div(id='div-date-single', style={'display': 'none'}, children=[
+                dcc.DatePickerSingle(
+                    id='anom-date-single',
+                    min_date_allowed=date(2020, 1, 1), max_date_allowed=date(2030, 12, 31),
+                    date=date(2025, 11, 15),
+                    display_format='Y-MM-DD', className="d-block", style={'width': '100%'}
+                )
+            ])
+        ], width=4),
+        # --- DATE SECTION END ---
+
         dbc.Col([html.Label("Company"), dcc.Dropdown(id='anom-comp', options=get_company_options(), placeholder="All Companies", clearable=True)], width=4),
         dbc.Col([html.Label("Plant"), dcc.Dropdown(id='anom-plant', options=get_plant_options(), placeholder="All Plants", clearable=True)], width=4),
     ], className="mb-4"),
 
     html.Hr(),
 
-    # 3. ANOMALY TABLES - ROW 1 (Skills & Contractor)
+    # 3. ANOMALY TABLES - ROW 1
     dbc.Row([
-        # Table 1: Skills
         dbc.Col(dbc.Card([
             dbc.CardHeader("Employees without Skills"), 
-            dbc.CardBody(dcc.Loading(
-                html.Div(id='tbl-skills', style={'maxHeight': '300px', 'overflowY': 'auto'}) # <--- ADDED SCROLL STYLE
-            ))
+            dbc.CardBody(dcc.Loading(html.Div(id='tbl-skills', style={'maxHeight': '300px', 'overflowY': 'auto'})))
         ], color="light", outline=True), width=6),
         
-        # Table 2: Contractor
         dbc.Col(dbc.Card([
             dbc.CardHeader("Employees without Contractor ID"), 
-            dbc.CardBody(dcc.Loading(
-                html.Div(id='tbl-contractor', style={'maxHeight': '300px', 'overflowY': 'auto'}) # <--- ADDED SCROLL STYLE
-            ))
+            dbc.CardBody(dcc.Loading(html.Div(id='tbl-contractor', style={'maxHeight': '300px', 'overflowY': 'auto'})))
         ], color="light", outline=True), width=6),
     ], className="mb-4"),
 
-    # 4. ANOMALY TABLES - ROW 2 (Salary Category & Department)
+    # 4. ANOMALY TABLES - ROW 2
     dbc.Row([
-        # Table 3: Salary Category (Designation in code)
         dbc.Col(dbc.Card([
             dbc.CardHeader("Employees without Salary Category"), 
-            dbc.CardBody(dcc.Loading(
-                html.Div(id='tbl-desig', style={'maxHeight': '300px', 'overflowY': 'auto'}) # <--- ADDED SCROLL STYLE
-            ))
+            dbc.CardBody(dcc.Loading(html.Div(id='tbl-desig', style={'maxHeight': '300px', 'overflowY': 'auto'})))
         ], color="light", outline=True), width=6),
         
-        # Table 4: Department
         dbc.Col(dbc.Card([
             dbc.CardHeader("Employees without Department"), 
-            dbc.CardBody(dcc.Loading(
-                html.Div(id='tbl-dept', style={'maxHeight': '300px', 'overflowY': 'auto'}) # <--- ADDED SCROLL STYLE
-            ))
+            dbc.CardBody(dcc.Loading(html.Div(id='tbl-dept', style={'maxHeight': '300px', 'overflowY': 'auto'})))
         ], color="light", outline=True), width=6),
     ]),
 
@@ -86,21 +110,45 @@ def load_context(data):
         return data['company_id'], True, data['plant_id'], True
     return None, False, None, False
 
+# 2. TOGGLE DATE PICKERS
+@callback(
+    [Output('div-date-range', 'style'), Output('div-date-single', 'style')],
+    Input('date-mode-radio', 'value')
+)
+def toggle_date_mode(mode):
+    if mode == 'single':
+        return {'display': 'none'}, {'display': 'block'}
+    return {'display': 'block'}, {'display': 'none'}
 
-# 2. UPDATE KPIs
+
+# 3. UPDATE KPIs (SECURE)
 @callback(
     [Output("kpi-present", "children"),
      Output("kpi-missed", "children"),
      Output("kpi-multi", "children")],
     [Input('anom-date', 'start_date'),
      Input('anom-date', 'end_date'),
+     Input('anom-date-single', 'date'),
+     Input('date-mode-radio', 'value'),
      Input('anom-plant', 'value'), 
-     Input('anom-comp', 'value')]
+     Input('anom-comp', 'value')],
+    [State('user-context-store', 'data')] # <--- [SECURITY UPDATE] Add State
 )
-def update_kpis(start_date, end_date, plant_id, company_id):
+def update_kpis(start_range, end_range, single_date, mode, plant_id, company_id, user_data):
+    # Date Logic
+    start_date = start_range
+    end_date = end_range
+    if mode == 'single':
+        start_date = single_date
+        end_date = single_date
+
     conditions = ["active = true"]
     if company_id: conditions.append(f"e.company_id = {company_id}")
     if plant_id: conditions.append(f"e.plant_id = {plant_id}")
+    
+    # [SECURITY UPDATE] Manually Check Contractor
+    if user_data and user_data.get('contractor_id'):
+        conditions.append(f"e.contractor_id = {user_data['contractor_id']}")
     
     date_cond = ""
     if start_date and end_date:
@@ -127,16 +175,23 @@ def update_kpis(start_date, end_date, plant_id, company_id):
         return "0", "0", "0"
 
 
-# 3. ANOMALY TABLES (With conditional formatting)
+# 4. ANOMALY TABLES (SECURE)
 @callback(
     [Output('tbl-skills', 'children'), Output('tbl-contractor', 'children'),
      Output('tbl-desig', 'children'), Output('tbl-dept', 'children')],
-    [Input('anom-comp', 'value'), Input('anom-plant', 'value')]
+    [Input('anom-comp', 'value'), Input('anom-plant', 'value')],
+    [State('user-context-store', 'data')] # <--- [SECURITY UPDATE] Add State
 )
-def update_anomaly_tables(company_id, plant_id):
+def update_anomaly_tables(company_id, plant_id, user_data):
     conditions = ["active = true"] 
     if company_id: conditions.append(f"company_id = {company_id}")
     if plant_id: conditions.append(f"plant_id = {plant_id}")
+    
+    # [SECURITY UPDATE] Manually Check Contractor
+    # Note: Tables query 'hr_employee' directly, so we use 'contractor_id' (no 'e.' prefix needed usually, but safe to omit prefix if single table)
+    if user_data and user_data.get('contractor_id'):
+        conditions.append(f"contractor_id = {user_data['contractor_id']}")
+
     where_base = "WHERE " + " AND ".join(conditions)
 
     def get_doj_style(doj_date):
@@ -159,7 +214,6 @@ def update_anomaly_tables(company_id, plant_id):
                     html.Td(row['create_date'].strftime('%Y-%m-%d') if pd.notnull(row['create_date']) else "N/A", style=get_doj_style(row['create_date'])),
                     html.Td(row['Name']), html.Td(row['Code'])
                 ]))
-            # Added style to ensure headers don't look weird in small container
             return dbc.Table([html.Thead(html.Tr([html.Th("DOJ"), html.Th("Name"), html.Th("Code")])), html.Tbody(rows)], bordered=True, size='sm', hover=True)
         except: return dbc.Alert("Error", color="danger")
 
