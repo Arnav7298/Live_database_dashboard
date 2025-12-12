@@ -44,7 +44,7 @@ layout = dbc.Container([
             dcc.Graph(
                 id='weekly-attendance-graph', 
                 config={'displayModeBar': False},
-                style={'height': '300px'}  # <--- ADDED TO FIX GRAPH STRETCHING ERROR
+                style={'height': '300px'}
             )
         ], width=6),
         
@@ -100,7 +100,7 @@ layout = dbc.Container([
         title="Drill-Down Details",
         is_open=False,
         placement="end",
-        style={"width": "50%"} # Takes up half the screen when open
+        style={"width": "50%"} 
     )
 
 ], fluid=True)
@@ -109,7 +109,7 @@ layout = dbc.Container([
 # CALLBACKS
 # ---------------------------------------------------------
 
-# 1. LOGIN / CONTEXT LOCKING
+# 1. LOGIN / CONTEXT LOCKING (Updates visual dropdowns only)
 @callback(
     [Output('att-comp', 'value'), Output('att-comp', 'disabled'),
      Output('att-plant', 'value'), Output('att-plant', 'disabled')],
@@ -120,7 +120,7 @@ def load_context(data):
         return data['company_id'], True, data['plant_id'], True
     return None, False, None, False
 
-# 2. COORDINATOR CALLBACK (Handles the Cross-Filtering State)
+# 2. COORDINATOR CALLBACK (No changes needed)
 @callback(
     Output('interaction-store', 'data'),
     [Input('department-bar-graph', 'clickData'),
@@ -157,16 +157,24 @@ def get_colors(df, category_col, filter_data, default_color, grey_color='#d3d3d3
     return [default_color if val == selected_val else grey_color for val in df[category_col]]
 
 
-# --- GRAPH CALLBACKS (COMBINED: FILTERS + DATA LABELS) ---
+# --- GRAPH CALLBACKS (ALL UPDATED WITH SECURITY LOGIC) ---
 
 # 1. WEEKLY GRAPH
 @callback(
     Output('weekly-attendance-graph', 'figure'),
     [Input('att-date', 'start_date'), Input('att-date', 'end_date'),
-     Input('att-plant', 'value'), Input('att-comp', 'value'), Input('att-type', 'value')]
+     Input('att-plant', 'value'), Input('att-comp', 'value'), Input('att-type', 'value')],
+    [State('user-context-store', 'data')] # <--- [SECURITY UPDATE] Add State
 )
-def update_weekly_graph(start_date, end_date, plant_id, company_id, emp_type):
-    joins, where_clause = build_base_query(plant_id, company_id, emp_type)
+def update_weekly_graph(start_date, end_date, plant_id, company_id, emp_type, user_data):
+    # [SECURITY UPDATE] Extract hidden contractor ID
+    contractor_id = None
+    if user_data and user_data.get('contractor_id'):
+        contractor_id = user_data['contractor_id']
+
+    # [SECURITY UPDATE] Pass contractor_id to build_base_query
+    joins, where_clause = build_base_query(plant_id, company_id, emp_type, contractor_id)
+    
     date_condition = ""
     if start_date and end_date:
         date_condition = f"AND DATE(a.check_in) >= '{start_date}' AND DATE(a.check_in) <= '{end_date}'"
@@ -187,9 +195,9 @@ def update_weekly_graph(start_date, end_date, plant_id, company_id, emp_type):
     fig = go.Figure(go.Scatter(
         x=df_final['date'], 
         y=df_final['count'], 
-        mode='lines+markers+text', # <--- DATA LABEL ENABLED
-        text=df_final['count'],    # <--- DATA LABEL VALUE
-        textposition='top center', # <--- DATA LABEL POSITION
+        mode='lines+markers+text',
+        text=df_final['count'],
+        textposition='top center',
         fill='tozeroy', 
         line=dict(color='#0d6efd', width=3)
     ))
@@ -202,9 +210,10 @@ def update_weekly_graph(start_date, end_date, plant_id, company_id, emp_type):
 @callback(
     Output('department-bar-graph', 'figure'),
     [Input('weekly-attendance-graph', 'clickData'), Input('att-plant', 'value'),
-     Input('att-comp', 'value'), Input('att-type', 'value'), Input('interaction-store', 'data')] 
+     Input('att-comp', 'value'), Input('att-type', 'value'), Input('interaction-store', 'data')],
+    [State('user-context-store', 'data')] # <--- [SECURITY UPDATE] Add State
 )
-def update_department_figure(clickData, plant_id, company_id, emp_type, filter_data):
+def update_department_figure(clickData, plant_id, company_id, emp_type, filter_data, user_data):
     if not clickData: return go.Figure().update_layout(title="Waiting...", xaxis={'visible':False}, yaxis={'visible':False})
     clicked_date = clickData['points'][0]['x']
     
@@ -213,13 +222,15 @@ def update_department_figure(clickData, plant_id, company_id, emp_type, filter_d
     if plant_id: conditions.append(f"e.plant_id = {plant_id}")
     if emp_type: conditions.append(f"e.employee_type = '{emp_type}'")
     
-    # [LOGIC PRESERVED] Cross-Filtering Check
+    # [SECURITY UPDATE] Manually add Contractor Restriction
+    if user_data and user_data.get('contractor_id'):
+        conditions.append(f"e.contractor_id = {user_data['contractor_id']}")
+
     if filter_data and filter_data.get('source') != 'department-bar-graph':
         conditions.append(f"{filter_data['col']} = '{filter_data['val']}'")
     
     where_sql = (" AND " + " AND ".join(conditions)) if conditions else ""
 
-    # [LOGIC PRESERVED] Full Joins for Filtering
     query = f"""
     SELECT d.name as dept_name, COUNT(DISTINCT a.employee_id) as present_count
     FROM hr_department d
@@ -233,7 +244,6 @@ def update_department_figure(clickData, plant_id, company_id, emp_type, filter_d
         df = pd.read_sql(query, db_connection)
         if df.empty: return go.Figure().update_layout(title="No Data")
         
-        # [LOGIC PRESERVED] Grey out colors
         is_self = (filter_data and filter_data.get('source') == 'department-bar-graph')
         colors = get_colors(df, 'dept_name', filter_data if is_self else None, '#0d6efd')
 
@@ -242,8 +252,8 @@ def update_department_figure(clickData, plant_id, company_id, emp_type, filter_d
             x=df['present_count'], 
             orientation='h', 
             marker=dict(color=colors),
-            text=df['present_count'], # <--- NEW DATA LABEL
-            textposition='auto'       # <--- NEW DATA LABEL
+            text=df['present_count'],
+            textposition='auto'
         ))
         fig.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=300) 
         return fig
@@ -254,9 +264,10 @@ def update_department_figure(clickData, plant_id, company_id, emp_type, filter_d
 @callback(
     [Output('gender-bar-graph', 'figure'), Output('skills-bar-graph', 'figure')],
     [Input('weekly-attendance-graph', 'clickData'), Input('att-plant', 'value'),
-     Input('att-comp', 'value'), Input('att-type', 'value'), Input('interaction-store', 'data')]
+     Input('att-comp', 'value'), Input('att-type', 'value'), Input('interaction-store', 'data')],
+    [State('user-context-store', 'data')] # <--- [SECURITY UPDATE] Add State
 )
-def update_gender_skills_figures(clickData, plant_id, company_id, emp_type, filter_data):
+def update_gender_skills_figures(clickData, plant_id, company_id, emp_type, filter_data, user_data):
     if not clickData: 
         empty = go.Figure().update_layout(title="Waiting...", xaxis={'visible':False}, yaxis={'visible':False})
         return empty, empty
@@ -267,7 +278,10 @@ def update_gender_skills_figures(clickData, plant_id, company_id, emp_type, filt
     if plant_id: base_conds.append(f"e.plant_id = {plant_id}")
     if emp_type: base_conds.append(f"e.employee_type = '{emp_type}'")
 
-    # [LOGIC PRESERVED] Cross-Filtering Logic
+    # [SECURITY UPDATE] Add Contractor Restriction
+    if user_data and user_data.get('contractor_id'):
+        base_conds.append(f"e.contractor_id = {user_data['contractor_id']}")
+
     g_conds, s_conds = base_conds.copy(), base_conds.copy()
     if filter_data:
         if filter_data.get('source') != 'gender-bar-graph': g_conds.append(f"{filter_data['col']} = '{filter_data['val']}'")
@@ -296,8 +310,8 @@ def update_gender_skills_figures(clickData, plant_id, company_id, emp_type, filt
             x=df_g['label'], 
             y=df_g['val'], 
             marker=dict(color=c_g),
-            text=df_g['val'],   # <--- NEW DATA LABEL
-            textposition='auto' # <--- NEW DATA LABEL
+            text=df_g['val'],
+            textposition='auto'
         ))
         fig_g.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=250)
 
@@ -305,8 +319,8 @@ def update_gender_skills_figures(clickData, plant_id, company_id, emp_type, filt
             x=df_s['label'], 
             y=df_s['val'], 
             marker=dict(color=c_s),
-            text=df_s['val'],   # <--- NEW DATA LABEL
-            textposition='auto' # <--- NEW DATA LABEL
+            text=df_s['val'],
+            textposition='auto'
         ))
         fig_s.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=250)
 
@@ -318,9 +332,10 @@ def update_gender_skills_figures(clickData, plant_id, company_id, emp_type, filt
 @callback(
     Output('shift-bar-graph', 'figure'),
     [Input('weekly-attendance-graph', 'clickData'), Input('att-plant', 'value'),
-     Input('att-comp', 'value'), Input('att-type', 'value'), Input('interaction-store', 'data')] 
+     Input('att-comp', 'value'), Input('att-type', 'value'), Input('interaction-store', 'data')],
+    [State('user-context-store', 'data')] # <--- [SECURITY UPDATE] Add State
 )
-def update_shift_figure(clickData, plant_id, company_id, emp_type, filter_data):
+def update_shift_figure(clickData, plant_id, company_id, emp_type, filter_data, user_data):
     if not clickData: return go.Figure().update_layout(title="Waiting...", xaxis={'visible':False}, yaxis={'visible':False})
     clicked_date = clickData['points'][0]['x']
     
@@ -328,8 +343,11 @@ def update_shift_figure(clickData, plant_id, company_id, emp_type, filter_data):
     if company_id: conds.append(f"s.company_id = {company_id}")
     if plant_id: conds.append(f"e.plant_id = {plant_id}")
     if emp_type: conds.append(f"e.employee_type = '{emp_type}'")
-    
-    # [LOGIC PRESERVED] Filter Check
+
+    # [SECURITY UPDATE] Add Contractor Restriction
+    if user_data and user_data.get('contractor_id'):
+        conds.append(f"e.contractor_id = {user_data['contractor_id']}")
+
     if filter_data and filter_data.get('source') != 'shift-bar-graph':
         conds.append(f"{filter_data['col']} = '{filter_data['val']}'")
     
@@ -353,8 +371,8 @@ def update_shift_figure(clickData, plant_id, company_id, emp_type, filter_data):
             x=df['label'], 
             y=df['val'], 
             marker=dict(color=colors),
-            text=df['val'],     # <--- NEW DATA LABEL
-            textposition='auto' # <--- NEW DATA LABEL
+            text=df['val'],
+            textposition='auto'
         ))
         fig.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=250)
         return fig
@@ -365,9 +383,10 @@ def update_shift_figure(clickData, plant_id, company_id, emp_type, filter_data):
 @callback(
     Output('contractor-bar-graph', 'figure'),
     [Input('weekly-attendance-graph', 'clickData'), Input('att-plant', 'value'),
-     Input('att-comp', 'value'), Input('att-type', 'value'), Input('interaction-store', 'data')]
+     Input('att-comp', 'value'), Input('att-type', 'value'), Input('interaction-store', 'data')],
+    [State('user-context-store', 'data')] # <--- [SECURITY UPDATE] Add State
 )
-def update_contractor_figure(clickData, plant_id, company_id, emp_type, filter_data):
+def update_contractor_figure(clickData, plant_id, company_id, emp_type, filter_data, user_data):
     if not clickData: return go.Figure().update_layout(title="Waiting...", xaxis={'visible':False}, yaxis={'visible':False})
     clicked_date = clickData['points'][0]['x']
     
@@ -376,7 +395,10 @@ def update_contractor_figure(clickData, plant_id, company_id, emp_type, filter_d
     if plant_id: conds.append(f"e.plant_id = {plant_id}")
     if emp_type: conds.append(f"e.employee_type = '{emp_type}'")
     
-    # [LOGIC PRESERVED] Filter Check
+    # [SECURITY UPDATE] Add Contractor Restriction
+    if user_data and user_data.get('contractor_id'):
+        conds.append(f"e.contractor_id = {user_data['contractor_id']}")
+
     if filter_data and filter_data.get('source') != 'contractor-bar-graph':
         conds.append(f"{filter_data['col']} = '{filter_data['val']}'")
     
@@ -402,14 +424,14 @@ def update_contractor_figure(clickData, plant_id, company_id, emp_type, filter_d
             x=df['val'], 
             orientation='h', 
             marker=dict(color=colors),
-            text=df['val'],      # <--- NEW DATA LABEL
-            textposition='auto'  # <--- NEW DATA LABEL
+            text=df['val'],
+            textposition='auto'
         ))
         fig.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=250)
         return fig
     except: return go.Figure()
 
-# --- DRILL DOWN: UPDATED TO USE OFFCANVAS ---
+# --- DRILL DOWN: UPDATED TO FIX WARNINGS ---
 @callback(
     [Output("details-offcanvas", "is_open"), 
      Output("table-container", "children"), 
@@ -420,15 +442,22 @@ def update_contractor_figure(clickData, plant_id, company_id, emp_type, filter_d
      Input('interaction-store', 'data'),
      Input('att-plant', 'value'), 
      Input('att-comp', 'value'), 
-     Input('att-type', 'value')]
+     Input('att-type', 'value')],
+    [State('user-context-store', 'data')]
 )
-def unified_drilldown(weekly_click, filter_data, plant_id, company_id, emp_type):
+def unified_drilldown(weekly_click, filter_data, plant_id, company_id, emp_type, user_data):
     
     if not weekly_click:
         return False, dash.no_update, dash.no_update, dash.no_update
 
     clicked_date = weekly_click['points'][0]['x']
-    _, where_clause = build_base_query(plant_id, company_id, emp_type)
+    
+    # Security: Extract contractor_id
+    contractor_id = None
+    if user_data and user_data.get('contractor_id'):
+        contractor_id = user_data['contractor_id']
+        
+    _, where_clause = build_base_query(plant_id, company_id, emp_type, contractor_id)
     
     extra_conditions = f" AND DATE(a.check_in) = '{clicked_date}'"
     header_text = f"Drill-Down: {clicked_date}"
@@ -460,13 +489,26 @@ def unified_drilldown(weekly_click, filter_data, plant_id, company_id, emp_type)
         if df_drill.empty:
             return True, dbc.Alert("No data found.", color="warning"), header_text, []
 
-        df_drill = df_drill.astype(object)
-        df_drill.fillna("N/A", inplace=True)
+        # --- FIX START: PROCESS DATES BEFORE FILLING "N/A" ---
+        
+        # 1. Handle "Check In" Format
+        if 'Check In' in df_drill.columns:
+            # Using errors='coerce' to turn bad data into NaT (Not a Time)
+            # This runs on the raw data BEFORE we add any "N/A" strings
+            df_drill['Check In'] = pd.to_datetime(df_drill['Check In'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
 
-        try:
-            df_drill['Check In'] = pd.to_datetime(df_drill['Check In'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M').fillna("N/A")
-            df_drill['Check Out'] = pd.to_datetime(df_drill['Check Out'], errors='coerce').dt.strftime('%H:%M').fillna("N/A")
-        except: pass 
+        # 2. Handle "Check Out" Format
+        if 'Check Out' in df_drill.columns:
+            df_drill['Check Out'] = pd.to_datetime(df_drill['Check Out'], errors='coerce').dt.strftime('%H:%M')
+
+        # 3. Now Convert to Object (Text) so we can add "N/A" safely
+        df_drill = df_drill.astype(object)
+
+        # 4. Fill Empty Spots (This catches the original Nulls AND the failed dates from step 1 & 2)
+        # assign the result back to df_drill to avoid the "inplace" warning
+        df_drill = df_drill.fillna("N/A")
+        
+        # --- FIX END ---
         
         table = dbc.Table.from_dataframe(df_drill, striped=True, bordered=True, hover=True, responsive=True)
         store_data = df_drill.to_dict('records')
@@ -474,6 +516,8 @@ def unified_drilldown(weekly_click, filter_data, plant_id, company_id, emp_type)
 
     except Exception as e:
         return True, dbc.Alert(f"Error: {e}", color="danger"), "Error", []
+
+# PDF/CSV EXPORT CALLBACKS REMAIN UNCHANGED
 
 # --- 9. EXPORT PDF (Unchanged) ---
 @callback(
