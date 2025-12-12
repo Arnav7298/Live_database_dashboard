@@ -8,7 +8,7 @@ from dash import html
 # ---------------------------------------------------------
 # 1. DATABASE CONNECTION
 # ---------------------------------------------------------
-db_connection_str = 'postgresql://lumaxuat:lumaxuat@[ip removed for privacy]:9832/lumaxuat'
+db_connection_str = 'postgresql://lumaxuat:lumaxuat@4.247.149.0:9832/lumaxuat'
 db_connection = create_engine(db_connection_str)
 
 # ---------------------------------------------------------
@@ -74,8 +74,8 @@ def get_emp_type_options():
 
 def decimal_to_time_str(val):
     """
-    Converts decimal hours (e.g., 1.5) to string format ("1h 30m").
-    Used for Graph text labels.
+    Converts decimal hours (e.g., 1.5) to string format ("1h 30m")
+    Used for Graph text labels
     """
     if pd.isna(val) or val == 0:
         return ""
@@ -83,17 +83,17 @@ def decimal_to_time_str(val):
     minutes = int(round((val - hours) * 60))
     return f"{hours}h {minutes}m"
 
+
 # ---------------------------------------------------------
-# 4. COMMON SQL BUILDER
+# 4. COMMON SQL BUILDER (UPDATED)
 # ---------------------------------------------------------
 
-def build_base_query(plant_id, company_id, emp_type):
+def build_base_query(plant_id, company_id, emp_type, contractor_id=None):
     """
-    Constructs standard WHERE clauses for Employee filters.
-    Used across all pages to ensure consistent filtering.
+    Constructs standard WHERE clauses.
+    Now accepts optional 'contractor_id' for restriction.
     """
     conditions = []
-    # Note: Using LEFT JOIN to ensure data isn't lost if employee profile is missing details
     joins = "LEFT JOIN hr_employee e ON a.employee_id = e.id"
     
     if company_id: 
@@ -103,8 +103,11 @@ def build_base_query(plant_id, company_id, emp_type):
         conditions.append(f"e.plant_id = {plant_id}")
         
     if emp_type: 
-        # Case-insensitive match for robustness
         conditions.append(f"LOWER(e.employee_type) = LOWER('{emp_type}')")
+
+    # --- NEW CONTRACTOR RESTRICTION ---
+    if contractor_id:
+        conditions.append(f"e.contractor_id = {contractor_id}")
 
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
     
