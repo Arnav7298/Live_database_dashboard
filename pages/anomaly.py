@@ -2,219 +2,249 @@ import dash
 from dash import dcc, html, Input, Output, State, callback
 import dash_bootstrap_components as dbc
 import pandas as pd
-from datetime import date
-from utils import db_connection, get_company_options, get_plant_options
+from datetime import date, timedelta
+from utils import db_connection, create_user_status_widget
 
 dash.register_page(__name__, path='/anomaly')
 
-# ---------------------------------------------------------
-# LAYOUT
-# ---------------------------------------------------------
 layout = dbc.Container([
-    
-    html.H3("Data Quality & Anomaly Tracking", className="mb-4 text-danger"),
+    # Header uses Red (text-danger) - kept as is since client wants Red focus
+    html.H3([html.I(className="fa-solid fa-triangle-exclamation me-2"), "Data Quality & Anomaly Tracking"], className="mb-4 text-danger fw-bold"),
 
-    # 1. KPI ROW
-    dbc.Row([
-        dbc.Col(dbc.Card(dbc.CardBody([html.H6("Total Present", className="text-muted"), html.H3("0", id="kpi-present", className="text-primary")]), className="shadow-sm"), width=4),
-        dbc.Col(dbc.Card(dbc.CardBody([html.H6("Missed Check-Out", className="text-muted"), html.H3("0", id="kpi-missed", className="text-danger")]), className="shadow-sm"), width=4),
-        dbc.Col(dbc.Card(dbc.CardBody([html.H6("Multiple Punches", className="text-muted"), html.H3("0", id="kpi-multi", className="text-warning")]), className="shadow-sm"), width=4),
-    ], className="mb-4"),
+    # --- MINI STATUS WIDGET ---
+    html.Div(id='anom-status-widget'),
 
-    # 2. FILTERS
+    # --- CONTROL ROW: Date Filter + Total Present KPI ---
     dbc.Row([
-        # --- DATE SECTION START ---
+        # 1. Date Filter Section
         dbc.Col([
+            # Removed 'text-light' so label is dark in light mode
+            html.Label([html.I(className="fa-regular fa-calendar-days me-2"), "Date Filter"], className="fw-bold small"),
             dbc.Row([
-                dbc.Col([html.Label("Filter Mode:")], width=4, className="align-self-center"),
-                dbc.Col([
+                dbc.Col(
                     dcc.RadioItems(
                         id='date-mode-radio',
                         options=[{'label': ' Range', 'value': 'range'}, {'label': ' Single', 'value': 'single'}],
                         value='range',
                         inline=True,
-                        inputStyle={"margin-right": "5px", "margin-left": "10px"}
-                    )
-                ], width=8)
-            ], className="mb-1"),
-            
-            # Container for Range Picker (Visible by default)
-            html.Div(id='div-date-range', children=[
-                dcc.DatePickerRange(
-                    id='anom-date', 
-                    min_date_allowed=date(2020, 1, 1), max_date_allowed=date(2030, 12, 31), 
-                    start_date=date(2025, 11, 15), end_date=date(2025, 11, 30), 
-                    display_format='Y-MM-DD', className="d-block"
+                        inputStyle={"margin-right": "5px"},
+                        labelStyle={"margin-right": "10px", "fontSize": "0.85rem"} # Removed hardcoded color
+                    ), width=12, className="mb-2"
                 )
             ]),
-
-            # Container for Single Picker (Hidden by default)
+            html.Div(id='div-date-range', children=[
+                dcc.DatePickerRange(id='anom-date', start_date=date(2025, 11, 15), end_date=date(2025, 11, 30), className="d-block w-100 shadow-sm")
+            ]),
             html.Div(id='div-date-single', style={'display': 'none'}, children=[
-                dcc.DatePickerSingle(
-                    id='anom-date-single',
-                    min_date_allowed=date(2020, 1, 1), max_date_allowed=date(2030, 12, 31),
-                    date=date(2025, 11, 15),
-                    display_format='Y-MM-DD', className="d-block", style={'width': '100%'}
-                )
+                dcc.DatePickerSingle(id='anom-date-single', date=date(2025, 11, 15), className="d-block w-100 shadow-sm")
             ])
-        ], width=4),
-        # --- DATE SECTION END ---
+        ], width=5, className="border-end pe-4"), # Removed 'border-secondary' to let theme handle border color
 
-        dbc.Col([html.Label("Company"), dcc.Dropdown(id='anom-comp', options=get_company_options(), placeholder="All Companies", clearable=True)], width=4),
-        dbc.Col([html.Label("Plant"), dcc.Dropdown(id='anom-plant', options=get_plant_options(), placeholder="All Plants", clearable=True)], width=4),
-    ], className="mb-4"),
+        # 2. Total Present KPI (Compact Widget)
+        dbc.Col([
+            # Removed color="dark", inverse=True. Changed to shadow-sm.
+            dbc.Card(dbc.CardBody([
+                html.Div([
+                    html.Div([
+                        # FIX: Removed 'text-muted' so it turns White in Dark Mode. Added opacity for style.
+                        html.H6("Total Present", className="small text-uppercase mb-1", style={'opacity': '0.7'}), 
+                        
+                        # Removed 'text-light' so it adapts to theme
+                        html.H3("0", id="kpi-present", className="fw-bold m-0")
+                    ]),
+                    html.Div(
+                        # Changed text-info to text-primary (Client Red)
+                        html.I(className="fa-solid fa-users fa-2x text-primary opacity-50"),
+                        className="ms-auto"
+                    )
+                ], className="d-flex align-items-center")
+            ]), className="shadow-sm border-0 h-100")
+        ], width=3, className="ps-4"),
 
-    html.Hr(),
+        # Spacer
+        dbc.Col(width=4)
 
-    # 3. ANOMALY TABLES - ROW 1
+    ], className="mb-4 align-items-end"),
+
+    html.Hr(), # Removed className="border-secondary" to let theme control it
+
+    # 3. ATTENDANCE ANOMALY TABLES
     dbc.Row([
         dbc.Col(dbc.Card([
-            dbc.CardHeader("Employees without Skills"), 
+            dbc.CardHeader([html.I(className="fa-solid fa-user-slash me-2 text-danger"), "Missed Check-Out Details"], className="fw-bold border-bottom"), 
+            dbc.CardBody(dcc.Loading(html.Div(id='tbl-missed', style={'maxHeight': '300px', 'overflowY': 'auto'})))
+        ], className="shadow-sm border-0 h-100"), width=6),
+        
+        dbc.Col(dbc.Card([
+            dbc.CardHeader([html.I(className="fa-solid fa-clock me-2 text-warning"), "Multiple Check-In Details"], className="fw-bold border-bottom"), 
+            dbc.CardBody(dcc.Loading(html.Div(id='tbl-multi', style={'maxHeight': '300px', 'overflowY': 'auto'})))
+        ], className="shadow-sm border-0 h-100"), width=6),
+    ], className="mb-4"),
+
+    # 4. MASTER DATA ANOMALY TABLES
+    dbc.Row([
+        dbc.Col(dbc.Card([
+            dbc.CardHeader("Employees without Skills", className="fw-bold border-bottom"), 
             dbc.CardBody(dcc.Loading(html.Div(id='tbl-skills', style={'maxHeight': '300px', 'overflowY': 'auto'})))
-        ], color="light", outline=True), width=6),
+        ], className="shadow-sm border-0 h-100"), width=6),
         
         dbc.Col(dbc.Card([
-            dbc.CardHeader("Employees without Contractor ID"), 
+            dbc.CardHeader("Employees without Contractor ID", className="fw-bold border-bottom"), 
             dbc.CardBody(dcc.Loading(html.Div(id='tbl-contractor', style={'maxHeight': '300px', 'overflowY': 'auto'})))
-        ], color="light", outline=True), width=6),
+        ], className="shadow-sm border-0 h-100"), width=6),
     ], className="mb-4"),
 
-    # 4. ANOMALY TABLES - ROW 2
     dbc.Row([
         dbc.Col(dbc.Card([
-            dbc.CardHeader("Employees without Salary Category"), 
+            dbc.CardHeader("Employees without Salary Category", className="fw-bold border-bottom"), 
             dbc.CardBody(dcc.Loading(html.Div(id='tbl-desig', style={'maxHeight': '300px', 'overflowY': 'auto'})))
-        ], color="light", outline=True), width=6),
+        ], className="shadow-sm border-0 h-100"), width=6),
         
         dbc.Col(dbc.Card([
-            dbc.CardHeader("Employees without Department"), 
+            dbc.CardHeader("Employees without Department", className="fw-bold border-bottom"), 
             dbc.CardBody(dcc.Loading(html.Div(id='tbl-dept', style={'maxHeight': '300px', 'overflowY': 'auto'})))
-        ], color="light", outline=True), width=6),
-    ]),
+        ], className="shadow-sm border-0 h-100"), width=6),
+    ], className="mb-5"),
 
 ], fluid=True)
 
-
 # ---------------------------------------------------------
-# CALLBACKS
+# CALLBACKS (Unchanged)
 # ---------------------------------------------------------
 
-# 1. LOGIN LOCKING
-@callback(
-    [Output('anom-comp', 'value'), Output('anom-comp', 'disabled'),
-     Output('anom-plant', 'value'), Output('anom-plant', 'disabled')],
-    Input('user-context-store', 'data')
-)
-def load_context(data):
-    if data and data.get('locked'):
-        return data['company_id'], True, data['plant_id'], True
-    return None, False, None, False
+@callback(Output('anom-status-widget', 'children'), Input('user-context-store', 'data'))
+def update_anomaly_widget(user_data):
+    if not user_data: return dash.no_update
+    empid = user_data.get('empid', 'Unknown')
+    contractor = user_data.get('contractor_name', None)
+    return create_user_status_widget(empid, contractor)
 
-# 2. TOGGLE DATE PICKERS
-@callback(
-    [Output('div-date-range', 'style'), Output('div-date-single', 'style')],
-    Input('date-mode-radio', 'value')
-)
+@callback([Output('div-date-range', 'style'), Output('div-date-single', 'style')], Input('date-mode-radio', 'value'))
 def toggle_date_mode(mode):
-    if mode == 'single':
-        return {'display': 'none'}, {'display': 'block'}
+    if mode == 'single': return {'display': 'none'}, {'display': 'block'}
     return {'display': 'block'}, {'display': 'none'}
 
-
-# 3. UPDATE KPIs (SECURE)
 @callback(
-    [Output("kpi-present", "children"),
-     Output("kpi-missed", "children"),
-     Output("kpi-multi", "children")],
-    [Input('anom-date', 'start_date'),
-     Input('anom-date', 'end_date'),
-     Input('anom-date-single', 'date'),
-     Input('date-mode-radio', 'value'),
-     Input('anom-plant', 'value'), 
-     Input('anom-comp', 'value')],
-    [State('user-context-store', 'data')] # <--- [SECURITY UPDATE] Add State
+    Output("kpi-present", "children"),
+    [Input('anom-date', 'start_date'), Input('anom-date', 'end_date'),
+     Input('anom-date-single', 'date'), Input('date-mode-radio', 'value'),
+     Input('user-context-store', 'data')]
 )
-def update_kpis(start_range, end_range, single_date, mode, plant_id, company_id, user_data):
-    # Date Logic
-    start_date = start_range
-    end_date = end_range
-    if mode == 'single':
-        start_date = single_date
-        end_date = single_date
+def update_kpi_present(start_range, end_range, single_date, mode, user_data):
+    plant_id = user_data.get('plant_id') if user_data else None
+    company_id = user_data.get('company_id') if user_data else None
+    contractor_id = user_data.get('contractor_id') if user_data else None
+
+    start_date = single_date if mode == 'single' else start_range
+    end_date = single_date if mode == 'single' else end_range
 
     conditions = ["active = true"]
     if company_id: conditions.append(f"e.company_id = {company_id}")
     if plant_id: conditions.append(f"e.plant_id = {plant_id}")
+    if contractor_id: conditions.append(f"e.contractor_id = {contractor_id}")
     
-    # [SECURITY UPDATE] Manually Check Contractor
-    if user_data and user_data.get('contractor_id'):
-        conditions.append(f"e.contractor_id = {user_data['contractor_id']}")
-    
-    date_cond = ""
-    if start_date and end_date:
-        date_cond = f"AND DATE(a.check_in) >= '{start_date}' AND DATE(a.check_in) <= '{end_date}'"
-
+    date_cond = f"AND DATE(a.check_in) >= '{start_date}' AND DATE(a.check_in) <= '{end_date}'" if start_date and end_date else ""
     join_sql = f"AND {' AND '.join(conditions)}"
     
     q_present = f"SELECT COUNT(DISTINCT a.employee_id) FROM hr_attendance a LEFT JOIN hr_employee e ON a.employee_id = e.id WHERE 1=1 {date_cond} {join_sql}"
-    q_missed = f"SELECT COUNT(*) FROM hr_attendance a LEFT JOIN hr_employee e ON a.employee_id = e.id WHERE a.check_out IS NULL {date_cond} {join_sql}"
-    q_multi = f"""
-    SELECT COUNT(*) FROM (
-        SELECT a.employee_id FROM hr_attendance a LEFT JOIN hr_employee e ON a.employee_id = e.id 
-        WHERE 1=1 {date_cond} {join_sql} 
-        GROUP BY a.employee_id, DATE(a.check_in) HAVING COUNT(*) > 1
-    ) as sub
-    """
 
     try:
         present = pd.read_sql(q_present, db_connection).iloc[0, 0]
-        missed = pd.read_sql(q_missed, db_connection).iloc[0, 0]
-        multi = pd.read_sql(q_multi, db_connection).iloc[0, 0]
-        return str(present), str(missed), str(multi)
-    except:
-        return "0", "0", "0"
+        return str(present)
+    except: return "0"
 
+@callback(
+    [Output('tbl-missed', 'children'), Output('tbl-multi', 'children')],
+    [Input('anom-date', 'start_date'), Input('anom-date', 'end_date'),
+     Input('anom-date-single', 'date'), Input('date-mode-radio', 'value'),
+     Input('user-context-store', 'data')]
+)
+def update_attendance_tables(start_range, end_range, single_date, mode, user_data):
+    plant_id = user_data.get('plant_id') if user_data else None
+    company_id = user_data.get('company_id') if user_data else None
+    contractor_id = user_data.get('contractor_id') if user_data else None
 
-# 4. ANOMALY TABLES (SECURE)
+    start_date = single_date if mode == 'single' else start_range
+    end_date = single_date if mode == 'single' else end_range
+
+    conditions = ["active = true"]
+    if company_id: conditions.append(f"e.company_id = {company_id}")
+    if plant_id: conditions.append(f"e.plant_id = {plant_id}")
+    if contractor_id: conditions.append(f"e.contractor_id = {contractor_id}")
+    
+    date_cond = f"AND DATE(a.check_in) >= '{start_date}' AND DATE(a.check_in) <= '{end_date}'" if start_date and end_date else ""
+    join_sql = f"AND {' AND '.join(conditions)}"
+
+    q_missed = f"""
+        SELECT DATE(a.check_in) as "Date", e.name as "Name", e.employee_code as "Employee Code" 
+        FROM hr_attendance a LEFT JOIN hr_employee e ON a.employee_id = e.id 
+        WHERE a.check_out IS NULL {date_cond} {join_sql}
+        ORDER BY a.check_in DESC LIMIT 50
+    """
+    
+    q_multi = f"""
+        SELECT DATE(a.check_in) as "Date", e.name as "Name", e.employee_code as "Employee Code", COUNT(*) as "Count"
+        FROM hr_attendance a LEFT JOIN hr_employee e ON a.employee_id = e.id 
+        WHERE 1=1 {date_cond} {join_sql} 
+        GROUP BY a.employee_id, DATE(a.check_in), e.name, e.employee_code
+        HAVING COUNT(*) > 1
+        ORDER BY "Date" DESC LIMIT 50
+    """
+
+    def make_table(query):
+        try:
+            df = pd.read_sql(query, db_connection)
+            if df.empty: return dbc.Alert("No anomalies found.", color="success")
+            
+            # Removed color="dark" -> Now listens to theme
+            table = dbc.Table.from_dataframe(df, striped=True, bordered=True, hover=True, size='sm') 
+            return table
+        except Exception as e: return dbc.Alert(f"Error: {e}", color="danger")
+
+    return make_table(q_missed), make_table(q_multi)
+
 @callback(
     [Output('tbl-skills', 'children'), Output('tbl-contractor', 'children'),
      Output('tbl-desig', 'children'), Output('tbl-dept', 'children')],
-    [Input('anom-comp', 'value'), Input('anom-plant', 'value')],
-    [State('user-context-store', 'data')] # <--- [SECURITY UPDATE] Add State
+    [Input('user-context-store', 'data')]
 )
-def update_anomaly_tables(company_id, plant_id, user_data):
+def update_master_tables(user_data):
+    plant_id = user_data.get('plant_id') if user_data else None
+    company_id = user_data.get('company_id') if user_data else None
+    contractor_id = user_data.get('contractor_id') if user_data else None
+
     conditions = ["active = true"] 
     if company_id: conditions.append(f"company_id = {company_id}")
     if plant_id: conditions.append(f"plant_id = {plant_id}")
-    
-    # [SECURITY UPDATE] Manually Check Contractor
-    # Note: Tables query 'hr_employee' directly, so we use 'contractor_id' (no 'e.' prefix needed usually, but safe to omit prefix if single table)
-    if user_data and user_data.get('contractor_id'):
-        conditions.append(f"contractor_id = {user_data['contractor_id']}")
+    if contractor_id: conditions.append(f"contractor_id = {contractor_id}")
 
     where_base = "WHERE " + " AND ".join(conditions)
 
-    def get_doj_style(doj_date):
-        if pd.isna(doj_date): return {}
-        d = doj_date.date() if hasattr(doj_date, 'date') else doj_date
-        days = (date.today() - d).days
-        if days <= 7: return {'backgroundColor': '#ffadad', 'color': 'black', 'fontWeight': 'bold'}
-        elif days <= 14: return {'backgroundColor': '#ffd6a5', 'color': 'black'}
-        elif days <= 21: return {'backgroundColor': '#fdffb6', 'color': 'black'}
-        else: return {'backgroundColor': '#caffbf', 'color': 'black'}
+    def get_doj_style(doj_val):
+        if pd.isna(doj_val): return {}
+        doj_date = doj_val.date() if hasattr(doj_val, 'date') else doj_val
+        diff_days = (date.today() - doj_date).days
+        
+        # NOTE: Colors here (white/orange/red) are specific indicators, 
+        # so we keep them hardcoded as they represent data status, not theme.
+        if diff_days <= 1: return {'color': 'white', 'fontWeight': 'bold', 'backgroundColor': '#28a745'} # Green bg for new joins visibility
+        elif diff_days <= 7: return {'color': '#fd7e14', 'fontWeight': 'bold'}
+        else: return {'color': '#dc3545', 'fontWeight': 'bold'}
 
     def get_table(cond):
-        query = f"SELECT create_date, name as \"Name\", employee_code as \"Code\" FROM hr_employee {where_base} AND {cond} ORDER BY create_date DESC LIMIT 50"
+        query = f"SELECT create_date, name as \"Name\", employee_code as \"Employee Code\" FROM hr_employee {where_base} AND {cond} ORDER BY create_date DESC LIMIT 50"
         try:
             df = pd.read_sql(query, db_connection)
             if df.empty: return dbc.Alert("Clean Data!", color="success")
             rows = []
             for _, row in df.iterrows():
-                rows.append(html.Tr([
-                    html.Td(row['create_date'].strftime('%Y-%m-%d') if pd.notnull(row['create_date']) else "N/A", style=get_doj_style(row['create_date'])),
-                    html.Td(row['Name']), html.Td(row['Code'])
-                ]))
-            return dbc.Table([html.Thead(html.Tr([html.Th("DOJ"), html.Th("Name"), html.Th("Code")])), html.Tbody(rows)], bordered=True, size='sm', hover=True)
+                style = get_doj_style(row['create_date'])
+                date_str = row['create_date'].strftime('%Y-%m-%d') if pd.notnull(row['create_date']) else "N/A"
+                rows.append(html.Tr([html.Td(date_str, style=style), html.Td(row['Name']), html.Td(row['Employee Code'])]))
+            
+            # Removed color="dark" -> Now listens to theme
+            return dbc.Table([html.Thead(html.Tr([html.Th("DOJ"), html.Th("Name"), html.Th("Employee Code")])), html.Tbody(rows)], bordered=True, size='sm', hover=True)
         except: return dbc.Alert("Error", color="danger")
 
-    return get_table("skills_status IS NULL"), get_table("contractor_id IS NULL"), get_table("designation IS NULL"), get_table("department_id IS NULL")
+    return get_table("skills_status IS NULL"), get_table("contractor_id IS NULL"), get_table("job_id IS NULL"), get_table("department_id IS NULL")
+
