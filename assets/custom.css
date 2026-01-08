@@ -1,0 +1,248 @@
+/* assets/custom.css */
+
+/* --- 1. GLOBAL VARIABLES (Default = LIGHT THEME) --- */
+:root {
+    /* Brand Colors (Client Theme: White & Red) */
+    --primary-color: #d32f2f;       /* Strong Red for Headers/Active elements */
+    --primary-light: #ffcdd2;       /* Light Red for backgrounds/hover */
+    --accent-color: #b71c1c;        /* Darker Red for accents */
+
+    /* Backgrounds & Text */
+    --bg-body: #ffffff;             /* Pure White Background */
+    --bg-card: #f8f9fa;             /* Very Light Grey for Cards */
+    --text-main: #212529;           /* Dark Grey Text (High Clarity) */
+    --text-muted: #6c757d;          
+    --border-color: #dee2e6;
+    
+    /* Chart Colors */
+    --chart-grid: #e9ecef;
+}
+
+/* --- 2. DARK THEME OVERRIDES --- */
+[data-theme="dark"] {
+    --primary-color: #ff5252;       /* Brighter Red for Dark Mode visibility */
+    --primary-light: #3e2728;       /* Dark Red/Brown background */
+    --accent-color: #ff867c;
+
+    --bg-body: #121212;             /* Deep Black/Grey */
+    --bg-card: #1e1e1e;             /* Slightly lighter card */
+    --text-main: #e0e0e0;           /* White Text */
+    --text-muted: #adb5bd;
+    --border-color: #2d2d2d;
+
+    --chart-grid: #404040;
+}
+
+/* --- 3. APPLY VARIABLES --- */
+body {
+    background-color: var(--bg-body) !important;
+    color: var(--text-main) !important;
+    transition: background-color 0.3s, color 0.3s; /* Smooth Transition */
+    font-family: 'Inter', sans-serif;
+}
+
+/* Cards */
+.card {
+    background-color: var(--bg-card) !important;
+    border: 1px solid var(--border-color) !important;
+    color: var(--text-main) !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05); /* Subtle shadow for clarity */
+}
+
+/* Headers */
+h1, h2, h3, h4, h5, h6 {
+    color: var(--primary-color) !important; /* Client Red Headers */
+}
+
+/* Navbar */
+.navbar {
+    background-color: var(--primary-color) !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* Buttons */
+.btn-primary {
+    background-color: var(--primary-color) !important;
+    border-color: var(--primary-color) !important;
+}
+.btn-primary:hover {
+    background-color: var(--accent-color) !important;
+}
+
+/* Dropdowns */
+.Select-control {
+    background-color: var(--bg-card) !important;
+    color: var(--text-main) !important;
+    border: 1px solid var(--border-color) !important;
+}
+.Select-menu-outer {
+    background-color: var(--bg-card) !important;
+    color: var(--text-main) !important;
+    border: 1px solid var(--border-color) !important;
+}
+.Select-value-label {
+    color: var(--text-main) !important;
+}
+
+/* Tables */
+.table {
+    color: var(--text-main) !important;
+    background-color: var(--bg-card) !important;
+}
+thead th {
+    background-color: var(--primary-light) !important; /* Light Red Header */
+    color: var(--primary-color) !important;
+    border-bottom: 2px solid var(--primary-color) !important;
+}
+
+/* --- 4. DATE PICKER DARK MODE FIX --- */
+/* Forces the React-Dates component to respect our Dark Theme variables */
+
+[data-theme="dark"] .DateInput,
+[data-theme="dark"] .DateInput_input,
+[data-theme="dark"] .DateRangePickerInput,
+[data-theme="dark"] .DateRangePickerInput__withBorder {
+    background-color: var(--bg-card) !important;
+    color: var(--text-main) !important;
+    border-color: var(--border-color) !important;
+}
+
+/* The Calendar Popup in Dark Mode */
+[data-theme="dark"] .DayPicker,
+[data-theme="dark"] .CalendarMonth,
+[data-theme="dark"] .CalendarMonthGrid {
+    background-color: #1e1e1e !important; /* Dark Grey Background */
+}
+
+[data-theme="dark"] .CalendarDay {
+    background-color: #1e1e1e !important;
+    color: #e0e0e0 !important; /* White Numbers */
+    border-color: #333 !important;
+}
+
+[data-theme="dark"] .CalendarDay:hover {
+    background-color: var(--primary-color) !important; /* Red Hover */
+    color: #fff !important;
+}
+
+[data-theme="dark"] .CalendarDay__selected,
+[data-theme="dark"] .CalendarDay__selected:hover {
+    background-color: var(--primary-color) !important; /* Active Date Red */
+    color: #fff !important;
+}
+
+[data-theme="dark"] .CalendarMonth_caption {
+    color: #e0e0e0 !important; /* Month Name White */
+}
+
+[data-theme="dark"] .DayPicker_weekHeader {
+    color: #adb5bd !important; /* Weekday Names Grey */
+}
+
+/* Arrow Icons in Calendar */
+[data-theme="dark"] .DayPickerNavigation_button__default {
+    background-color: transparent !important;
+    border: none !important;
+}
+[data-theme="dark"] .DayPickerNavigation_svg__horizontal {
+    fill: #e0e0e0 !important; /* White Arrows */
+}
+
+
+/* --- 5. PLOTLY GRAPH TEXT FIX --- */
+/* Forces all graph text to use our CSS Variable Color (White in Dark Mode) */
+
+[data-theme="dark"] .js-plotly-plot .plotly .main-svg text {
+    fill: var(--text-main) !important;
+}
+
+/* Optional: Fix Gridlines in Dark Mode if they are too bright */
+[data-theme="dark"] .js-plotly-plot .plotly .main-svg .gridlayer path {
+    stroke: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* --- 6. ANOMALY PAGE SPECIFIC FIXES --- */
+
+/* 1. Fix Single Date Picker (Used in Anomaly Page) */
+[data-theme="dark"] .SingleDatePickerInput,
+[data-theme="dark"] .SingleDatePickerInput__withBorder {
+    background-color: var(--bg-card) !important;
+    border-color: var(--border-color) !important;
+}
+
+/* 2. Fix Total Present KPI Text Color */
+/* Forces the KPI number to use the main text variable (White in Dark Mode) */
+#kpi-present {
+    color: var(--text-main) !important;
+}
+
+/* 3. Fix Table Backgrounds & Text */
+/* Ensures all tables (Missed, Multi, Master Data) adapt to theme */
+[data-theme="dark"] .table {
+    color: var(--text-main) !important;
+    background-color: var(--bg-card) !important;
+    --bs-table-bg: var(--bg-card) !important; /* Bootstrap 5 Override */
+    --bs-table-color: var(--text-main) !important;
+    border-color: var(--border-color) !important;
+}
+
+/* Fix Table Striping in Dark Mode */
+[data-theme="dark"] .table-striped > tbody > tr:nth-of-type(odd) > * {
+    --bs-table-accent-bg: rgba(255, 255, 255, 0.05) !important;
+    color: var(--text-main) !important;
+}
+
+/* Fix Table Hover Effect in Dark Mode */
+[data-theme="dark"] .table-hover > tbody > tr:hover > * {
+    --bs-table-accent-bg: rgba(211, 47, 47, 0.15) !important; /* Subtle Red Tint on Hover */
+    color: #fff !important;
+}
+
+/* Fix Table Header Background in Dark Mode */
+[data-theme="dark"] thead th {
+    background-color: #2c2c2c !important; /* Slightly lighter than card */
+    color: var(--primary-color) !important; /* Keep Red Text */
+    border-bottom: 2px solid var(--primary-color) !important;
+}
+
+/* --- 7. MANDAYS DATE PICKER FIX --- */
+/* Ensures the background turns dark on the Man Days page specifically */
+
+[data-theme="dark"] .DateRangePickerInput,
+[data-theme="dark"] .DateInput {
+    background-color: var(--bg-card) !important;
+}
+
+[data-theme="dark"] .DateInput_input {
+    background-color: var(--bg-card) !important;
+    color: var(--text-main) !important;
+    border-bottom: 2px solid var(--border-color) !important;
+}
+
+/* Fix the "Arrow" icon between dates */
+[data-theme="dark"] .DateRangePickerInput_arrow_svg {
+    fill: var(--text-main) !important;
+}
+
+/* Fix the "Clear" X button */
+[data-theme="dark"] .DateRangePickerInput_clearDates {
+    background: transparent !important;
+}
+[data-theme="dark"] .DateRangePickerInput_clearDates_svg {
+    fill: var(--text-main) !important;
+}
+
+/* --- 8. OFFCANVAS (DRILL DOWN) DARK MODE --- */
+[data-theme="dark"] .offcanvas {
+    background-color: var(--bg-card) !important;
+    color: var(--text-main) !important;
+    border-left: 1px solid var(--border-color) !important;
+}
+
+[data-theme="dark"] .offcanvas-header {
+    border-bottom: 1px solid var(--border-color) !important;
+}
+
+[data-theme="dark"] .btn-close {
+    filter: invert(1) grayscale(100%) brightness(200%); /* Makes the 'X' close button white */
+}
