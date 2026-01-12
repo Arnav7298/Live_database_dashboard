@@ -130,6 +130,9 @@ def handle_login(search_str, current_data):
             print("No ACTIVE employee found with this ID.")
             return dash.no_update # Access Denied
 
+        print("Login Successful! User Data:")
+        print(df.iloc[0])
+
         row = df.iloc[0]
         c_name = row['contractor_name']
         display_name = c_name if pd.notnull(c_name) else "Internal / All"
@@ -167,5 +170,6 @@ def update_navbar_badge(user_data):
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
