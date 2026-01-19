@@ -1,5 +1,5 @@
-dash
-dash-bootstrap-components
+dash>=2.17.0
+dash-bootstrap-components>=1.6.0
 pandas
 plotly
 sqlalchemy
