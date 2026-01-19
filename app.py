@@ -169,7 +169,8 @@ def update_navbar_badge(user_data):
         return [html.I(className="fa-solid fa-building-shield me-2"), f"View: {c_name}"], "ms-3 p-2 border fw-bold"
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run_server(host='0.0.0.0', port=8050, debug=False)
+
 
 
 
