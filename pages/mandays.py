@@ -1,11 +1,11 @@
 import dash
-from dash import dcc, html, Input, Output, State, callback, callback_context
+from dash import dcc, html, Input, Output, State, callback, callback_context, no_update
 import dash_bootstrap_components as dbc
 import pandas as pd
 from datetime import date
 from fpdf import FPDF
 import numpy as np
-from utils import db_connection, render_info_tooltip, create_user_status_widget
+from utils import db_connection, render_info_tooltip, create_user_status_widget, get_supervisor_counts
 
 dash.register_page(__name__, path='/mandays', name='Man Days')
 
@@ -20,20 +20,45 @@ layout = dbc.Container([
     # --- 1. MINI STATUS WIDGET ---
     html.Div(id='md-status-widget'),
 
-    # --- 2. DATE FILTER ---
+    # --- 2. CONTROLS ROW (Date + Supervisor KPI) ---
     dbc.Row([
+        # Date Picker
         dbc.Col([
-            html.Label([html.I(className="fa-regular fa-calendar me-2"), "Date Range"], className="fw-bold small"),
-            dcc.DatePickerRange(id='md-date', start_date=date(2025, 11, 15), end_date=date(2025, 11, 30), className="d-block w-100 shadow-sm")
+            html.Label([html.I(className="fa-regular fa-calendar me-2"), "Select Date"], className="fw-bold small"),
+            dcc.DatePickerSingle(
+                id='md-date', 
+                date=date(2025, 11, 15), 
+                min_date_allowed=date(2020, 1, 1),
+                max_date_allowed=date(2030, 12, 31),
+                display_format='Y-MM-DD',
+                className="d-block w-100 shadow-sm"
+            )
         ], width=4),
-    ], className="mb-4"),
 
-    # --- ACTION BUTTONS ---
-    dbc.Row([
-        dbc.Col(width=8),
-        dbc.Col(dbc.Button([html.I(className="fa-solid fa-file-csv me-2"), "Export CSV"], id="md-btn-csv", color="success", size="sm", className="w-100 shadow-sm"), width=2),
-        dbc.Col(dbc.Button([html.I(className="fa-solid fa-file-pdf me-2"), "Export PDF"], id="md-btn-pdf", color="danger", size="sm", className="w-100 shadow-sm"), width=2),
-    ], className="mb-3"),
+        # Employees Present Widget
+        dbc.Col([
+             dbc.Card([
+                dbc.CardBody([
+                    dbc.Row([
+                        dbc.Col([
+                            html.H6("Employees Present", className="card-subtitle text-muted mb-1 small text-uppercase"),
+                            html.H4(id="md-kpi-supervisor-count", children="0 / 0", className="card-title text-primary fw-bold mb-0")
+                        ], width=8),
+                        dbc.Col([
+                            html.I(className="fa-solid fa-people-group fa-2x text-black-50")
+                        ], width=4, className="d-flex align-items-center justify-content-end")
+                    ])
+                ], className="p-2")
+             ], className="shadow-sm border-0 h-100")
+        ], width=4),
+
+        # Action Buttons
+        dbc.Col([
+            dbc.Button([html.I(className="fa-solid fa-file-csv me-2"), "Export CSV"], id="md-btn-csv", color="success", size="sm", className="w-100 mb-2 shadow-sm"),
+            dbc.Button([html.I(className="fa-solid fa-file-pdf me-2"), "Export PDF"], id="md-btn-pdf", color="danger", size="sm", className="w-100 shadow-sm"),
+        ], width=4),
+
+    ], className="mb-4 align-items-end"),
 
     # --- DATA TABLE CARD ---
     dbc.Card([
@@ -50,46 +75,77 @@ layout = dbc.Container([
 # ---------------------------------------------------------
 
 # 1. WIDGET UPDATE
-@callback(Output('md-status-widget', 'children'), Input('user-context-store', 'data'))
-def update_mandays_widget(user_data):
-    if not user_data: return dash.no_update
-    empid = user_data.get('empid', 'Unknown')
+@callback(
+    Output('md-status-widget', 'children'), 
+    [Input('user-context-store', 'data'),
+     Input('md-date', 'date')]
+)
+def update_mandays_widget(user_data, selected_date):
+    # --- GUARD CLAUSE ---
+    if user_data is None: 
+        return dash.no_update
+    # --------------------
+    
+    emp_name = user_data.get('emp_name', 'Unknown')
     contractor = user_data.get('contractor_name', None)
-    return create_user_status_widget(empid, contractor)
+    date_display = str(selected_date) if selected_date else "Select Date"
+    
+    return create_user_status_widget(emp_name, contractor, date_display)
+
+# --- SUPERVISOR KPI CALLBACK ---
+@callback(Output('md-kpi-supervisor-count', 'children'), 
+          [Input('md-date', 'date'), Input('user-context-store', 'data')])
+def update_md_supervisor_kpi(selected_date, user_data):
+    # --- GUARD CLAUSE ---
+    if user_data is None: 
+        return "0 / 0"
+    # --------------------
+
+    supervisor_id = user_data.get('empid')
+    return get_supervisor_counts(supervisor_id, selected_date)
 
 # 2. GENERATE TABLE
 @callback(
     [Output('mandays-table-container', 'children'),
      Output('md-data-store', 'data')],
-    [Input('md-date', 'start_date'), Input('md-date', 'end_date'),
+    [Input('md-date', 'date'), 
      Input('user-context-store', 'data')] 
 )
-def update_table(start_date, end_date, user_data):
+def update_table(selected_date, user_data):
+    # --- GUARD CLAUSE ---
+    if user_data is None:
+        return html.Div("Loading...", className="text-muted p-3"), []
+    # --------------------
+
     plant_id = user_data.get('plant_id') if user_data else None
     company_id = user_data.get('company_id') if user_data else None
     contractor_id = user_data.get('contractor_id') if user_data else None
+    supervisor_id = user_data.get('empid')
 
     conds = ["e.active = true"]
     if company_id: conds.append(f"e.company_id = {company_id}")
     if plant_id: conds.append(f"e.plant_id = {plant_id}")
     if contractor_id: conds.append(f"e.contractor_id = {contractor_id}")
     
+    # FILTER: Add Supervisor Scope
+    if supervisor_id: conds.append(f"e.parent_id = {supervisor_id}")
+    
     date_cond = ""
-    if start_date and end_date:
-        date_cond = f"AND DATE(a.check_in) >= '{start_date}' AND DATE(a.check_in) <= '{end_date}'"
+    if selected_date:
+        date_cond = f"AND DATE(a.check_in) = '{selected_date}'"
 
     where_sql = "WHERE " + " AND ".join(conds) if conds else "WHERE 1=1"
 
     query = f"""
     SELECT 
-        s.name as "Shift",
+        COALESCE(s.name, 'No Shift') as "Shift",
         COALESCE(d.name, 'Unknown') as "Department",
         e.id as emp_id,
-        s.hours_per_day as std_hours,
+        COALESCE(s.hours_per_day, 8) as std_hours,
         EXTRACT(EPOCH FROM (a.check_out - a.check_in))/3600 as worked_hours
     FROM hr_attendance a
     JOIN hr_employee e ON a.employee_id = e.id
-    JOIN resource_calendar s ON e.resource_calendar_id = s.id
+    LEFT JOIN resource_calendar s ON e.resource_calendar_id = s.id 
     LEFT JOIN hr_department d ON e.department_id = d.id
     LEFT JOIN hr_job j ON e.job_id = j.id
     {where_sql} {date_cond} AND a.check_out IS NOT NULL
@@ -99,9 +155,9 @@ def update_table(start_date, end_date, user_data):
         df = pd.read_sql(query, db_connection)
         
         if df.empty:
-            return dbc.Alert("No data found for these filters.", color="warning"), []
+            return dbc.Alert("No data found for this date.", color="warning"), []
 
-        # LOGIC
+        # --- DATA PROCESSING ---
         df['is_standard'] = df['worked_hours'] >= df['std_hours']
         df['is_early'] = df['worked_hours'] < df['std_hours']
         df['diff'] = df['worked_hours'] - df['std_hours']
@@ -123,7 +179,7 @@ def update_table(start_date, end_date, user_data):
             Std_Emp=('is_standard', 'sum'),
             Early_Emp=('is_early', 'sum'),
             Extra_Emp=('is_extra', 'sum'),
-            Sum_Extra_Hrs=('val_extra', 'sum'),
+            Sum_Extra_Hrs=('val_extra', 'sum'), # This is the raw count of extra hours
             Good_Emp=('is_good', 'sum'),
             Sum_Good_Hrs=('val_good', 'sum'), 
             Sum_OT_Hrs=('val_ot', 'sum')
@@ -142,6 +198,7 @@ def update_table(start_date, end_date, user_data):
                 html.Th("Std Hrs Emp"),
                 html.Th("Early Exit"),
                 html.Th("Extra Hrs Emp"),
+                html.Th("Extra Hours"), # NEW COLUMN HEADER
                 html.Th("Extra Hrs MD"),
                 html.Th("Good Hrs Emp"),
                 html.Th("Good Hrs MD"),
@@ -151,18 +208,18 @@ def update_table(start_date, end_date, user_data):
 
         table_rows = []
         for _, row in grouped.iterrows():
-            # --- CLEANED UP ROWS (No Colors, just Data) ---
             table_rows.append(html.Tr([
-                html.Td(row['Shift'], className="fw-bold"), # Kept bold, removed color
+                html.Td(row['Shift'], className="fw-bold"),
                 html.Td(row['Department']),
                 html.Td(row['Total_Emp']),
-                html.Td(row['Std_Emp']),   # Removed text-success
-                html.Td(row['Early_Emp']), # Removed text-warning
-                html.Td(row['Extra_Emp']), # Removed text-danger
+                html.Td(row['Std_Emp']),
+                html.Td(row['Early_Emp']),
+                html.Td(row['Extra_Emp']),
+                html.Td(row['Sum_Extra_Hrs']), # NEW COLUMN DATA
                 html.Td(row['Extra_MD'], className="fw-bold"),
-                html.Td(row['Good_Emp']),  # Removed text-primary
+                html.Td(row['Good_Emp']),
                 html.Td(row['Good_MD'], className="fw-bold"),
-                html.Td(row['OT_MD'], className="fw-bold") # Removed text-light
+                html.Td(row['OT_MD'], className="fw-bold")
             ]))
 
         table = dbc.Table([html.Thead(table_header), html.Tbody(table_rows)], 
@@ -189,11 +246,15 @@ def download_pdf(n, data):
     pdf.ln(5)
     pdf.set_font("Arial", size=8)
     
-    cols = ['Shift', 'Department', 'Total_Emp', 'Std_Emp', 'Early_Emp', 'Extra_Emp', 'Extra_MD', 'Good_Emp', 'Good_MD', 'OT_MD']
-    col_w = [20, 50, 20, 20, 20, 20, 20, 20, 20, 20]
+    # Updated Columns List for PDF
+    cols = ['Shift', 'Department', 'Total_Emp', 'Std_Emp', 'Early_Emp', 'Extra_Emp', 'Sum_Extra_Hrs', 'Extra_MD', 'Good_Emp', 'Good_MD', 'OT_MD']
+    # Updated Widths (added 20 for the new column)
+    col_w = [20, 45, 18, 18, 18, 18, 20, 18, 18, 18, 18]
     
     for i, col in enumerate(cols):
-        pdf.cell(col_w[i], 8, col[:12], border=1, align='C')
+        # Shorten header for PDF if needed
+        header_text = "Ex. Hrs" if col == 'Sum_Extra_Hrs' else col[:12]
+        pdf.cell(col_w[i], 8, header_text, border=1, align='C')
     pdf.ln()
     for _, row in df.iterrows():
         for i, col in enumerate(cols):
