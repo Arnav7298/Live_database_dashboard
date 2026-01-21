@@ -1,8 +1,8 @@
 import dash
-from dash import dcc, html, Input, Output, State, callback
+from dash import dcc, html, Input, Output, State, callback, dash_table
 import dash_bootstrap_components as dbc
 import pandas as pd
-from datetime import date, timedelta
+from datetime import date
 from utils import db_connection, create_user_status_widget
 
 dash.register_page(__name__, path='/anomaly')
@@ -28,7 +28,7 @@ layout = dbc.Container([
                         value='range',
                         inline=True,
                         inputStyle={"margin-right": "5px"},
-                        labelStyle={"margin-right": "10px", "fontSize": "0.85rem"} # Removed hardcoded color
+                        labelStyle={"margin-right": "10px", "fontSize": "0.85rem"} 
                     ), width=12, className="mb-2"
                 )
             ]),
@@ -38,22 +38,17 @@ layout = dbc.Container([
             html.Div(id='div-date-single', style={'display': 'none'}, children=[
                 dcc.DatePickerSingle(id='anom-date-single', date=date(2025, 11, 15), className="d-block w-100 shadow-sm")
             ])
-        ], width=5, className="border-end pe-4"), # Removed 'border-secondary' to let theme handle border color
+        ], width=5, className="border-end pe-4"), 
 
         # 2. Total Present KPI (Compact Widget)
         dbc.Col([
-            # Removed color="dark", inverse=True. Changed to shadow-sm.
             dbc.Card(dbc.CardBody([
                 html.Div([
                     html.Div([
-                        # FIX: Removed 'text-muted' so it turns White in Dark Mode. Added opacity for style.
                         html.H6("Total Present", className="small text-uppercase mb-1", style={'opacity': '0.7'}), 
-                        
-                        # Removed 'text-light' so it adapts to theme
                         html.H3("0", id="kpi-present", className="fw-bold m-0")
                     ]),
                     html.Div(
-                        # Changed text-info to text-primary (Client Red)
                         html.I(className="fa-solid fa-users fa-2x text-primary opacity-50"),
                         className="ms-auto"
                     )
@@ -66,7 +61,7 @@ layout = dbc.Container([
 
     ], className="mb-4 align-items-end"),
 
-    html.Hr(), # Removed className="border-secondary" to let theme control it
+    html.Hr(), 
 
     # 3. ATTENDANCE ANOMALY TABLES
     dbc.Row([
@@ -109,15 +104,21 @@ layout = dbc.Container([
 ], fluid=True)
 
 # ---------------------------------------------------------
-# CALLBACKS (Unchanged)
+# CALLBACKS
 # ---------------------------------------------------------
 
 @callback(Output('anom-status-widget', 'children'), Input('user-context-store', 'data'))
 def update_anomaly_widget(user_data):
-    if not user_data: return dash.no_update
-    empid = user_data.get('empid', 'Unknown')
+    # --- GUARD CLAUSE ---
+    if user_data is None: 
+        return dash.no_update
+    # --------------------
+    
+    emp_name = user_data.get('emp_name', 'Unknown')
     contractor = user_data.get('contractor_name', None)
-    return create_user_status_widget(empid, contractor)
+    
+    # Use 'Select Date' as placeholder since this page uses a complex filter
+    return create_user_status_widget(emp_name, contractor, "Date Filter")
 
 @callback([Output('div-date-range', 'style'), Output('div-date-single', 'style')], Input('date-mode-radio', 'value'))
 def toggle_date_mode(mode):
@@ -131,17 +132,25 @@ def toggle_date_mode(mode):
      Input('user-context-store', 'data')]
 )
 def update_kpi_present(start_range, end_range, single_date, mode, user_data):
-    plant_id = user_data.get('plant_id') if user_data else None
-    company_id = user_data.get('company_id') if user_data else None
-    contractor_id = user_data.get('contractor_id') if user_data else None
+    # --- GUARD CLAUSE ---
+    if user_data is None: return "0"
+    # --------------------
+
+    plant_id = user_data.get('plant_id')
+    company_id = user_data.get('company_id')
+    contractor_id = user_data.get('contractor_id')
+    supervisor_id = user_data.get('empid') # NEW: Fetch Supervisor ID
 
     start_date = single_date if mode == 'single' else start_range
     end_date = single_date if mode == 'single' else end_range
 
-    conditions = ["active = true"]
+    conditions = ["e.active = true"]
     if company_id: conditions.append(f"e.company_id = {company_id}")
     if plant_id: conditions.append(f"e.plant_id = {plant_id}")
     if contractor_id: conditions.append(f"e.contractor_id = {contractor_id}")
+    
+    # NEW: Filter by Supervisor
+    if supervisor_id: conditions.append(f"e.parent_id = {supervisor_id}")
     
     date_cond = f"AND DATE(a.check_in) >= '{start_date}' AND DATE(a.check_in) <= '{end_date}'" if start_date and end_date else ""
     join_sql = f"AND {' AND '.join(conditions)}"
@@ -160,17 +169,26 @@ def update_kpi_present(start_range, end_range, single_date, mode, user_data):
      Input('user-context-store', 'data')]
 )
 def update_attendance_tables(start_range, end_range, single_date, mode, user_data):
-    plant_id = user_data.get('plant_id') if user_data else None
-    company_id = user_data.get('company_id') if user_data else None
-    contractor_id = user_data.get('contractor_id') if user_data else None
+    # --- GUARD CLAUSE ---
+    if user_data is None: 
+        return html.Div("Loading..."), html.Div("Loading...")
+    # --------------------
+
+    plant_id = user_data.get('plant_id')
+    company_id = user_data.get('company_id')
+    contractor_id = user_data.get('contractor_id')
+    supervisor_id = user_data.get('empid') # NEW: Fetch Supervisor ID
 
     start_date = single_date if mode == 'single' else start_range
     end_date = single_date if mode == 'single' else end_range
 
-    conditions = ["active = true"]
+    conditions = ["e.active = true"]
     if company_id: conditions.append(f"e.company_id = {company_id}")
     if plant_id: conditions.append(f"e.plant_id = {plant_id}")
     if contractor_id: conditions.append(f"e.contractor_id = {contractor_id}")
+    
+    # NEW: Filter by Supervisor
+    if supervisor_id: conditions.append(f"e.parent_id = {supervisor_id}")
     
     date_cond = f"AND DATE(a.check_in) >= '{start_date}' AND DATE(a.check_in) <= '{end_date}'" if start_date and end_date else ""
     join_sql = f"AND {' AND '.join(conditions)}"
@@ -196,7 +214,6 @@ def update_attendance_tables(start_range, end_range, single_date, mode, user_dat
             df = pd.read_sql(query, db_connection)
             if df.empty: return dbc.Alert("No anomalies found.", color="success")
             
-            # Removed color="dark" -> Now listens to theme
             table = dbc.Table.from_dataframe(df, striped=True, bordered=True, hover=True, size='sm') 
             return table
         except Exception as e: return dbc.Alert(f"Error: {e}", color="danger")
@@ -209,14 +226,23 @@ def update_attendance_tables(start_range, end_range, single_date, mode, user_dat
     [Input('user-context-store', 'data')]
 )
 def update_master_tables(user_data):
-    plant_id = user_data.get('plant_id') if user_data else None
-    company_id = user_data.get('company_id') if user_data else None
-    contractor_id = user_data.get('contractor_id') if user_data else None
+    # --- GUARD CLAUSE ---
+    if user_data is None:
+        return [html.Div("Loading...")] * 4
+    # --------------------
+
+    plant_id = user_data.get('plant_id')
+    company_id = user_data.get('company_id')
+    contractor_id = user_data.get('contractor_id')
+    supervisor_id = user_data.get('empid') # NEW: Fetch Supervisor ID
 
     conditions = ["active = true"] 
     if company_id: conditions.append(f"company_id = {company_id}")
     if plant_id: conditions.append(f"plant_id = {plant_id}")
     if contractor_id: conditions.append(f"contractor_id = {contractor_id}")
+    
+    # NEW: Filter by Supervisor
+    if supervisor_id: conditions.append(f"parent_id = {supervisor_id}")
 
     where_base = "WHERE " + " AND ".join(conditions)
 
@@ -225,9 +251,7 @@ def update_master_tables(user_data):
         doj_date = doj_val.date() if hasattr(doj_val, 'date') else doj_val
         diff_days = (date.today() - doj_date).days
         
-        # NOTE: Colors here (white/orange/red) are specific indicators, 
-        # so we keep them hardcoded as they represent data status, not theme.
-        if diff_days <= 1: return {'color': 'white', 'fontWeight': 'bold', 'backgroundColor': '#28a745'} # Green bg for new joins visibility
+        if diff_days <= 1: return {'color': 'white', 'fontWeight': 'bold', 'backgroundColor': '#28a745'} 
         elif diff_days <= 7: return {'color': '#fd7e14', 'fontWeight': 'bold'}
         else: return {'color': '#dc3545', 'fontWeight': 'bold'}
 
@@ -242,9 +266,9 @@ def update_master_tables(user_data):
                 date_str = row['create_date'].strftime('%Y-%m-%d') if pd.notnull(row['create_date']) else "N/A"
                 rows.append(html.Tr([html.Td(date_str, style=style), html.Td(row['Name']), html.Td(row['Employee Code'])]))
             
-            # Removed color="dark" -> Now listens to theme
             return dbc.Table([html.Thead(html.Tr([html.Th("DOJ"), html.Th("Name"), html.Th("Employee Code")])), html.Tbody(rows)], bordered=True, size='sm', hover=True)
         except: return dbc.Alert("Error", color="danger")
 
     return get_table("skills_status IS NULL"), get_table("contractor_id IS NULL"), get_table("job_id IS NULL"), get_table("department_id IS NULL")
+
 
