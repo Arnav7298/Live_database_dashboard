@@ -3,8 +3,8 @@ from dash import dcc, html, Input, Output, State, callback, callback_context, no
 import dash_bootstrap_components as dbc
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import date
-from utils import db_connection, build_base_query, apply_minimalist_style, render_info_tooltip, create_user_status_widget
+from datetime import date, timedelta
+from utils import db_connection, build_base_query, apply_minimalist_style, render_info_tooltip, create_user_status_widget, get_supervisor_counts
 from fpdf import FPDF
 
 dash.register_page(__name__, path='/')
@@ -21,17 +21,44 @@ layout = dbc.Container([
     # --- 1. MINI STATUS WIDGET ---
     html.Div(id='att-status-widget'),
 
-    # --- 2. DATE FILTER ---
+    # --- 2. CONTROLS ROW (Date + Supervisor KPI) ---
     dbc.Row([
+        # Date Picker
         dbc.Col([
-            # Removed 'text-light' so it defaults to dark text in Light Mode
-            html.Label([html.I(className="fa-regular fa-calendar me-2"), "Date Range"], className="fw-bold small"),
-            dcc.DatePickerRange(id='att-date', min_date_allowed=date(2020, 1, 1), max_date_allowed=date(2030, 12, 31), start_date=date(2025, 11, 15), end_date=date(2025, 11, 30), display_format='Y-MM-DD', className="d-block w-100 shadow-sm")
+            html.Label([html.I(className="fa-regular fa-calendar me-2"), "Select Anchor Date"], className="fw-bold small"),
+            dcc.DatePickerSingle(
+                id='att-date',
+                min_date_allowed=date(2020, 1, 1),
+                max_date_allowed=date(2030, 12, 31),
+                date=date(2025, 11, 30), # Default Date
+                display_format='Y-MM-DD',
+                className="d-block w-100 shadow-sm"
+            )
         ], width=4),
+
+        # NEW: Supervisor Employee Count Widget
+        dbc.Col([
+             dbc.Card([
+                dbc.CardBody([
+                    dbc.Row([
+                        dbc.Col([
+                            # --- CHANGED LABEL HERE ---
+                            html.H6("Employees Present", className="card-subtitle text-muted mb-1 small text-uppercase"),
+                            html.H4(id="kpi-supervisor-count", children="0 / 0", className="card-title text-primary fw-bold mb-0")
+                        ], width=8),
+                        dbc.Col([
+                            html.I(className="fa-solid fa-people-group fa-2x text-black-50")
+                        ], width=4, className="d-flex align-items-center justify-content-end")
+                    ])
+                ], className="p-2")
+             ], className="shadow-sm border-0 h-100")
+        ], width=4),
+
+        # Reset Button
         dbc.Col([
             dbc.Button([html.I(className="fa-solid fa-rotate-left"), " Reset View"], id="btn-clear-filter", color="danger", outline=True, size="sm", className="mt-4 w-100")
         ], width=2)
-    ], className="mb-4"),
+    ], className="mb-4 align-items-end"),
 
     # 3. ROW 1: WEEKLY + DEPARTMENT
     dbc.Row([
@@ -43,11 +70,11 @@ layout = dbc.Container([
             ], className="fw-bold border-bottom d-flex align-items-center"),
             dbc.CardBody(dcc.Loading(
                 html.Div(
-                    html.Div(dcc.Graph(id='weekly-attendance-graph', config={'displayModeBar': False}), style={'minWidth': '500px'}),
+                    html.Div(dcc.Graph(id='weekly-attendance-graph', config={'displayModeBar': False}), style={'minWidth': '1000px'}),
                     style={'height': '350px', 'overflowX': 'auto', 'overflowY': 'hidden'}
                 )
             ))
-        ], className="shadow-sm border-0 h-100"), width=6), # Removed color="dark", inverse=True
+        ], className="shadow-sm border-0 h-100"), width=6), 
         
         dbc.Col(dbc.Card([
             dbc.CardHeader([
@@ -102,12 +129,37 @@ layout = dbc.Container([
 # ---------------------------------------------------------
 
 # 1. WIDGET UPDATE
-@callback(Output('att-status-widget', 'children'), Input('user-context-store', 'data'))
-def update_attendance_widget(user_data):
-    if not user_data: return dash.no_update
-    empid = user_data.get('empid', 'Unknown')
+@callback(
+    Output('att-status-widget', 'children'), 
+    [Input('user-context-store', 'data'), 
+     Input('att-date', 'date')]
+)
+def update_attendance_widget(user_data, selected_date):
+    # --- GUARD CLAUSE ---
+    if user_data is None: 
+        return dash.no_update
+    # --------------------
+    
+    emp_name = user_data.get('emp_name', 'Unknown') 
     contractor = user_data.get('contractor_name', None)
-    return create_user_status_widget(empid, contractor)
+    
+    return create_user_status_widget(emp_name, contractor, selected_date)
+
+# --- NEW: SUPERVISOR KPI WIDGET (Using Utils) ---
+@callback(Output('kpi-supervisor-count', 'children'), 
+          [Input('att-date', 'date'), Input('user-context-store', 'data')])
+def update_supervisor_kpi(selected_date, user_data):
+    # --- GUARD CLAUSE ---
+    if user_data is None: 
+        return "0 / 0"
+    # --------------------
+
+    if not selected_date: return "0 / 0"
+    
+    supervisor_id = user_data.get('empid') 
+    
+    # Use helper function instead of repeating SQL
+    return get_supervisor_counts(supervisor_id, selected_date)
 
 # 2. COORDINATOR
 @callback(
@@ -128,57 +180,128 @@ def update_interaction_store(dept_click, gender_click, skills_click, shift_click
     if trigger_id == 'shift-bar-graph' and shift_click: return {'col': 's.name', 'val': shift_click['points'][0]['x'], 'source': trigger_id}
     return {}
 
-def get_colors(df, category_col, filter_data, default_color, grey_color='#adb5bd'): # Lighter grey for light mode
+def get_colors(df, category_col, filter_data, default_color, grey_color='#adb5bd'):
     if not filter_data or filter_data.get('col') is None: return [default_color] * len(df)
     selected_val = filter_data['val']
     return [default_color if val == selected_val else grey_color for val in df[category_col]]
 
 # --- GRAPH CALLBACKS ---
 
-@callback(Output('weekly-attendance-graph', 'figure'), [Input('att-date', 'start_date'), Input('att-date', 'end_date'), Input('user-context-store', 'data')])
-def update_weekly_graph(start_date, end_date, user_data):
-    plant_id = user_data.get('plant_id') if user_data else None
-    company_id = user_data.get('company_id') if user_data else None
-    contractor_id = user_data.get('contractor_id') if user_data else None
+@callback(Output('weekly-attendance-graph', 'figure'), 
+          [Input('att-date', 'date'), Input('user-context-store', 'data')])
+def update_weekly_graph(selected_date, user_data):
+    # --- GUARD CLAUSE ---
+    if user_data is None:
+        return dash.no_update
+    # --------------------
+
+    if not selected_date: return go.Figure().update_layout(title="Select a date")
     
+    plant_id = user_data.get('plant_id') 
+    company_id = user_data.get('company_id') 
+    contractor_id = user_data.get('contractor_id') 
+    supervisor_id = user_data.get('empid') # Logged in user is supervisor
+
+    sel_dt = pd.to_datetime(selected_date).date()
+    start_current_week = sel_dt - timedelta(days=sel_dt.weekday()) 
+    end_current_week = start_current_week + timedelta(days=6)
+    start_prev_week = start_current_week - timedelta(days=7)
+    
+    q_start = start_prev_week 
+    q_end = end_current_week
+
     joins, where_clause = build_base_query(plant_id, company_id, None, contractor_id)
-    date_condition = f"AND DATE(a.check_in) >= '{start_date}' AND DATE(a.check_in) <= '{end_date}'" if start_date and end_date else ""
+    
+    # FILTER: Add Supervisor Scope
+    if supervisor_id:
+        where_clause += f" AND e.parent_id = {supervisor_id}"
+
+    date_condition = f"AND DATE(a.check_in) >= '{q_start}' AND DATE(a.check_in) <= '{q_end}'"
     final_where = (where_clause + " " + date_condition) if where_clause else (f" WHERE {date_condition[4:]}" if date_condition else "")
     
     try:
         df = pd.read_sql(f"SELECT a.check_in, a.employee_id FROM hr_attendance a {joins} {final_where}", db_connection)
     except Exception as e: return go.Figure().update_layout(title=f"Error: {e}")
 
-    if df.empty: return go.Figure().update_layout(title="No data found")
+    if df.empty: 
+        df_final = pd.DataFrame({'date': [sel_dt], 'count': [0]})
+    else:
+        df['check_in'] = pd.to_datetime(df['check_in'], errors='coerce')
+        df_grouped = df.dropna(subset=['check_in']).copy()
+        df_grouped['date'] = df_grouped['check_in'].dt.date
+        df_final = df_grouped.groupby('date')['employee_id'].nunique().reset_index(name='count').sort_values('date')
     
-    df['check_in'] = pd.to_datetime(df['check_in'], errors='coerce')
-    df_grouped = df.dropna(subset=['check_in']).copy()
-    df_grouped['date'] = df_grouped['check_in'].dt.date
-    df_final = df_grouped.groupby('date')['employee_id'].nunique().reset_index(name='count').sort_values('date')
+    colors = ['#d32f2f' if d == sel_dt else '#adb5bd' for d in df_final['date']]
+    sizes = [14 if d == sel_dt else 8 for d in df_final['date']]
     
-    # Use Red Line for Client Branding
     fig = go.Figure(go.Scatter(
-        x=df_final['date'], y=df_final['count'], mode='lines+markers',
-        fill='tozeroy', line=dict(color='#d32f2f', width=3, shape='spline'), # Red
-        marker=dict(size=8, color='#d32f2f', line=dict(width=2, color='white'))
+        x=df_final['date'], 
+        y=df_final['count'], 
+        mode='lines+markers+text', 
+        text=df_final['count'],    
+        textposition="top center",
+        fill='tozeroy', 
+        line=dict(color='#d32f2f', width=2, shape='spline'), 
+        marker=dict(size=sizes, color=colors, line=dict(width=1, color='white'))
     ))
+    
     apply_minimalist_style(fig, height=350)
-    fig.update_xaxes(showgrid=False)
+
+    range_start = q_start - timedelta(days=1)
+    range_end = q_end + timedelta(days=1)
+
+    fig.update_xaxes(
+        showgrid=False, 
+        type='date', 
+        tickformat='%d-%b',
+        dtick=86400000.0, 
+        range=[range_start, range_end], 
+        fixedrange=True
+    )
+    
+    fig.update_layout(
+        margin=dict(l=60, r=60, t=30, b=40),
+        minreducedwidth=1000 
+    )
+    
     return fig
 
-@callback(Output('department-bar-graph', 'figure'), [Input('weekly-attendance-graph', 'clickData'), Input('interaction-store', 'data'), Input('user-context-store', 'data')])
-def update_department_figure(clickData, filter_data, user_data):
-    if not clickData: return go.Figure().update_layout(title="Waiting...", xaxis={'visible':False}, yaxis={'visible':False})
-    plant_id = user_data.get('plant_id') if user_data else None
-    company_id = user_data.get('company_id') if user_data else None
-    contractor_id = user_data.get('contractor_id') if user_data else None
-    clicked_date = clickData['points'][0]['x']
+@callback(Output('department-bar-graph', 'figure'), 
+          [Input('weekly-attendance-graph', 'clickData'), 
+           Input('att-date', 'date'), 
+           Input('interaction-store', 'data'), 
+           Input('user-context-store', 'data')])
+def update_department_figure(clickData, date_picker_val, filter_data, user_data):
+    # --- GUARD CLAUSE ---
+    if user_data is None:
+        return dash.no_update
+    # --------------------
+
+    ctx = callback_context
+    clicked_date = date_picker_val 
+    
+    if ctx.triggered:
+        trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+        if trigger_id == 'weekly-attendance-graph' and clickData:
+            clicked_date = clickData['points'][0]['x']
+    
+    if not clicked_date: return go.Figure()
+
+    plant_id = user_data.get('plant_id') 
+    company_id = user_data.get('company_id') 
+    contractor_id = user_data.get('contractor_id') 
+    supervisor_id = user_data.get('empid') # Logged in user is supervisor
     
     conditions = ["e.active = true"]
     if company_id: conditions.append(f"e.company_id = {company_id}")
     if plant_id: conditions.append(f"e.plant_id = {plant_id}")
     if contractor_id: conditions.append(f"e.contractor_id = {contractor_id}")
+    
+    # FILTER: Add Supervisor Scope
+    if supervisor_id: conditions.append(f"e.parent_id = {supervisor_id}")
+
     if filter_data and filter_data.get('source') != 'department-bar-graph': conditions.append(f"{filter_data['col']} = '{filter_data['val']}'")
+    
     where_sql = (" AND " + " AND ".join(conditions)) if conditions else ""
 
     query = f"""
@@ -193,10 +316,10 @@ def update_department_figure(clickData, filter_data, user_data):
     """
     try:
         df = pd.read_sql(query, db_connection)
-        if df.empty: return go.Figure()
+        if df.empty: return go.Figure().update_layout(title="No Data")
         
         is_self = (filter_data and filter_data.get('source') == 'department-bar-graph')
-        present_colors = get_colors(df, 'dept_name', filter_data if is_self else None, '#d32f2f') # Red
+        present_colors = get_colors(df, 'dept_name', filter_data if is_self else None, '#d32f2f')
 
         fig = go.Figure()
         fig.add_trace(go.Bar(y=df['dept_name'], x=df['req_a'], name='Req A', orientation='h', marker=dict(color='#1976d2'), text=df['req_a'], textposition='auto'))
@@ -212,18 +335,36 @@ def update_department_figure(clickData, filter_data, user_data):
     except: return go.Figure()
 
 @callback([Output('gender-bar-graph', 'figure'), Output('skills-bar-graph', 'figure')],
-    [Input('weekly-attendance-graph', 'clickData'), Input('interaction-store', 'data'), Input('user-context-store', 'data')])
-def update_gender_skills_figures(clickData, filter_data, user_data):
-    if not clickData: return go.Figure(), go.Figure()
-    plant_id = user_data.get('plant_id') if user_data else None
-    company_id = user_data.get('company_id') if user_data else None
-    contractor_id = user_data.get('contractor_id') if user_data else None
-    clicked_date = clickData['points'][0]['x']
+    [Input('weekly-attendance-graph', 'clickData'), 
+     Input('att-date', 'date'), 
+     Input('interaction-store', 'data'), 
+     Input('user-context-store', 'data')])
+def update_gender_skills_figures(clickData, date_picker_val, filter_data, user_data):
+    # --- GUARD CLAUSE ---
+    if user_data is None:
+        return go.Figure(), go.Figure()
+    # --------------------
+
+    ctx = callback_context
+    clicked_date = date_picker_val
+    if ctx.triggered:
+        if ctx.triggered[0]['prop_id'].startswith('weekly-attendance-graph') and clickData:
+            clicked_date = clickData['points'][0]['x']
+            
+    if not clicked_date: return go.Figure(), go.Figure()
+
+    plant_id = user_data.get('plant_id') 
+    company_id = user_data.get('company_id') 
+    contractor_id = user_data.get('contractor_id') 
+    supervisor_id = user_data.get('empid')
     
     base_conds = ["e.active = true"]
     if company_id: base_conds.append(f"e.company_id = {company_id}")
     if plant_id: base_conds.append(f"e.plant_id = {plant_id}")
     if contractor_id: base_conds.append(f"e.contractor_id = {contractor_id}")
+    
+    # FILTER: Add Supervisor Scope
+    if supervisor_id: base_conds.append(f"e.parent_id = {supervisor_id}")
 
     g_conds, s_conds = base_conds.copy(), base_conds.copy()
     if filter_data:
@@ -254,18 +395,38 @@ def update_gender_skills_figures(clickData, filter_data, user_data):
         return fig_g, fig_s
     except: return go.Figure(), go.Figure()
 
-@callback(Output('shift-bar-graph', 'figure'), [Input('weekly-attendance-graph', 'clickData'), Input('interaction-store', 'data'), Input('user-context-store', 'data')])
-def update_shift_figure(clickData, filter_data, user_data):
-    if not clickData: return go.Figure()
-    plant_id = user_data.get('plant_id') if user_data else None
-    company_id = user_data.get('company_id') if user_data else None
-    contractor_id = user_data.get('contractor_id') if user_data else None
-    clicked_date = clickData['points'][0]['x']
+@callback(Output('shift-bar-graph', 'figure'), 
+          [Input('weekly-attendance-graph', 'clickData'), 
+           Input('att-date', 'date'), 
+           Input('interaction-store', 'data'), 
+           Input('user-context-store', 'data')])
+def update_shift_figure(clickData, date_picker_val, filter_data, user_data):
+    # --- GUARD CLAUSE ---
+    if user_data is None:
+        return go.Figure()
+    # --------------------
+
+    ctx = callback_context
+    clicked_date = date_picker_val
+    if ctx.triggered:
+        if ctx.triggered[0]['prop_id'].startswith('weekly-attendance-graph') and clickData:
+            clicked_date = clickData['points'][0]['x']
+
+    if not clicked_date: return go.Figure()
+    
+    plant_id = user_data.get('plant_id')
+    company_id = user_data.get('company_id') 
+    contractor_id = user_data.get('contractor_id') 
+    supervisor_id = user_data.get('empid')
     
     conds = ["s.active = True", "e.active = true"]
     if company_id: conds.append(f"s.company_id = {company_id}")
     if plant_id: conds.append(f"e.plant_id = {plant_id}")
     if contractor_id: conds.append(f"e.contractor_id = {contractor_id}")
+    
+    # FILTER: Add Supervisor Scope
+    if supervisor_id: conds.append(f"e.parent_id = {supervisor_id}")
+
     if filter_data and filter_data.get('source') != 'shift-bar-graph': conds.append(f"{filter_data['col']} = '{filter_data['val']}'")
     where_sql = "WHERE " + " AND ".join(conds)
 
@@ -293,16 +454,40 @@ def update_shift_figure(clickData, filter_data, user_data):
 # 7. DRILL DOWN (Updated with Employee Code)
 @callback(
     [Output("details-offcanvas", "is_open"), Output("table-container", "children"), Output("details-offcanvas", "title"), Output("drilldown-store", "data")],
-    [Input("weekly-attendance-graph", "clickData"), Input('interaction-store', 'data'), Input('user-context-store', 'data')]
+    [Input("weekly-attendance-graph", "clickData"), 
+     Input('att-date', 'date'), 
+     Input('interaction-store', 'data'), 
+     Input('user-context-store', 'data')]
 )
-def unified_drilldown(weekly_click, filter_data, user_data):
+def unified_drilldown(weekly_click, date_picker_val, filter_data, user_data):
+    # --- GUARD CLAUSE ---
+    if user_data is None:
+        return False, dash.no_update, dash.no_update, dash.no_update
+    # --------------------
+
+    ctx = callback_context
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+
+    clicked_date = date_picker_val
+    if weekly_click: clicked_date = weekly_click['points'][0]['x']
+
+    if trigger_id == 'att-date':
+        return False, dash.no_update, dash.no_update, dash.no_update
+
     if not weekly_click: return False, dash.no_update, dash.no_update, dash.no_update
-    plant_id = user_data.get('plant_id') if user_data else None
-    company_id = user_data.get('company_id') if user_data else None
-    contractor_id = user_data.get('contractor_id') if user_data else None
-    clicked_date = weekly_click['points'][0]['x']
+    
+    plant_id = user_data.get('plant_id') 
+    company_id = user_data.get('company_id') 
+    contractor_id = user_data.get('contractor_id') 
+    supervisor_id = user_data.get('empid')
     
     _, where_clause = build_base_query(plant_id, company_id, None, contractor_id)
+    
+    # FILTER: Add Supervisor Scope
+    if supervisor_id:
+        if where_clause: where_clause += f" AND e.parent_id = {supervisor_id}"
+        else: where_clause = f" WHERE e.parent_id = {supervisor_id}"
+    
     extra_conditions = f" AND DATE(a.check_in) = '{clicked_date}'"
     header_text = f"Drill-Down: {clicked_date}"
     if filter_data:
@@ -310,8 +495,6 @@ def unified_drilldown(weekly_click, filter_data, user_data):
         header_text += f" ({filter_data['val']})"
     full_where = (where_clause + extra_conditions) if where_clause else f" WHERE 1=1 {extra_conditions}"
 
-    # --- SQL UPDATE HERE ---
-    # Added: e.employee_code as "Code" (First Column)
     query = f"""
     SELECT DISTINCT 
         e.employee_code as "Code",
@@ -335,13 +518,11 @@ def unified_drilldown(weekly_click, filter_data, user_data):
         df_drill = pd.read_sql(query, db_connection)
         if df_drill.empty: return True, dbc.Alert("No data found.", color="warning"), header_text, []
         
-        # Formatting Dates
         if 'Check In' in df_drill.columns: df_drill['Check In'] = pd.to_datetime(df_drill['Check In'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
         if 'Check Out' in df_drill.columns: df_drill['Check Out'] = pd.to_datetime(df_drill['Check Out'], errors='coerce').dt.strftime('%H:%M')
         
         df_drill = df_drill.astype(object).fillna("N/A")
         
-        # Table Generation
         table = dbc.Table.from_dataframe(df_drill, striped=True, bordered=True, hover=True, responsive=True) 
         store_data = df_drill.to_dict('records')
         return True, table, header_text, store_data
@@ -358,7 +539,7 @@ def download_pdf(n_clicks, data):
     pdf = FPDF(orientation='L', unit='mm', format='A4')
     pdf.add_page()
     pdf.set_font("Arial", 'B', 14)
-    pdf.cell(0, 10, txt="Attendance Drill-Down Report", ln=True, align='C')
+    pdf.cell(0, 10, txt="Attendance Report", ln=True, align='C')
     pdf.ln(5)
     pdf.set_font("Arial", size=8)
     cols = df_export.columns.tolist()
@@ -381,3 +562,4 @@ def download_csv(n_clicks, data):
     df_export = pd.DataFrame(data)
     df_export.insert(0, "S.No", range(1, 1 + len(df_export)))
     return dcc.send_data_frame(df_export.to_csv, filename="attendance_drilldown.csv", index=False)
+
