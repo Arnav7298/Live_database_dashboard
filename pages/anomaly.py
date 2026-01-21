@@ -1,69 +1,62 @@
 import dash
-from dash import dcc, html, Input, Output, State, callback, dash_table
+from dash import dcc, html, Input, Output, State, callback
 import dash_bootstrap_components as dbc
 import pandas as pd
 from datetime import date
-from utils import db_connection, create_user_status_widget
+from utils import db_connection, create_user_status_widget, get_supervisor_counts
 
 dash.register_page(__name__, path='/anomaly')
 
 layout = dbc.Container([
-    # Header uses Red (text-danger) - kept as is since client wants Red focus
+    # Store for session data
+    dcc.Store(id='anomaly-data-store'),
+
+    # Header - Kept the "Anomaly" title
     html.H3([html.I(className="fa-solid fa-triangle-exclamation me-2"), "Data Quality & Anomaly Tracking"], className="mb-4 text-danger fw-bold"),
 
-    # --- MINI STATUS WIDGET ---
-    html.Div(id='anom-status-widget'),
+    # --- 1. MINI STATUS WIDGET ---
+    html.Div(id='anomaly-status-widget'),
 
-    # --- CONTROL ROW: Date Filter + Total Present KPI ---
+    # --- 2. CONTROLS ROW (Single Date + Supervisor KPI) ---
     dbc.Row([
-        # 1. Date Filter Section
+        # SINGLE DATE PICKER (Requested Feature)
         dbc.Col([
-            # Removed 'text-light' so label is dark in light mode
-            html.Label([html.I(className="fa-regular fa-calendar-days me-2"), "Date Filter"], className="fw-bold small"),
-            dbc.Row([
-                dbc.Col(
-                    dcc.RadioItems(
-                        id='date-mode-radio',
-                        options=[{'label': ' Range', 'value': 'range'}, {'label': ' Single', 'value': 'single'}],
-                        value='range',
-                        inline=True,
-                        inputStyle={"margin-right": "5px"},
-                        labelStyle={"margin-right": "10px", "fontSize": "0.85rem"} 
-                    ), width=12, className="mb-2"
-                )
-            ]),
-            html.Div(id='div-date-range', children=[
-                dcc.DatePickerRange(id='anom-date', start_date=date(2025, 11, 15), end_date=date(2025, 11, 30), className="d-block w-100 shadow-sm")
-            ]),
-            html.Div(id='div-date-single', style={'display': 'none'}, children=[
-                dcc.DatePickerSingle(id='anom-date-single', date=date(2025, 11, 15), className="d-block w-100 shadow-sm")
-            ])
-        ], width=5, className="border-end pe-4"), 
+            html.Label([html.I(className="fa-regular fa-calendar me-2"), "Select Date"], className="fw-bold small"),
+            dcc.DatePickerSingle(
+                id='anomaly-date', 
+                date=date(2025, 11, 15), 
+                min_date_allowed=date(2020, 1, 1),
+                max_date_allowed=date(2030, 12, 31),
+                display_format='Y-MM-DD',
+                className="d-block w-100 shadow-sm"
+            )
+        ], width=4),
 
-        # 2. Total Present KPI (Compact Widget)
+        # EMPLOYEES PRESENT WIDGET (Requested Feature)
         dbc.Col([
-            dbc.Card(dbc.CardBody([
-                html.Div([
-                    html.Div([
-                        html.H6("Total Present", className="small text-uppercase mb-1", style={'opacity': '0.7'}), 
-                        html.H3("0", id="kpi-present", className="fw-bold m-0")
-                    ]),
-                    html.Div(
-                        html.I(className="fa-solid fa-users fa-2x text-primary opacity-50"),
-                        className="ms-auto"
-                    )
-                ], className="d-flex align-items-center")
-            ]), className="shadow-sm border-0 h-100")
-        ], width=3, className="ps-4"),
+             dbc.Card([
+                dbc.CardBody([
+                    dbc.Row([
+                        dbc.Col([
+                            html.H6("Employees Present", className="card-subtitle text-muted mb-1 small text-uppercase"),
+                            html.H4(id="anomaly-kpi-supervisor-count", children="0 / 0", className="card-title text-primary fw-bold mb-0")
+                        ], width=8),
+                        dbc.Col([
+                            html.I(className="fa-solid fa-people-group fa-2x text-black-50")
+                        ], width=4, className="d-flex align-items-center justify-content-end")
+                    ])
+                ], className="p-2")
+             ], className="shadow-sm border-0 h-100")
+        ], width=4),
 
-        # Spacer
-        dbc.Col(width=4)
+        # Spacer (or you can add Export buttons here if needed later)
+        dbc.Col(width=4),
 
     ], className="mb-4 align-items-end"),
 
     html.Hr(), 
 
-    # 3. ATTENDANCE ANOMALY TABLES
+    # --- 3. ATTENDANCE ANOMALY TABLES (Driven by Single Date) ---
     dbc.Row([
         dbc.Col(dbc.Card([
             dbc.CardHeader([html.I(className="fa-solid fa-user-slash me-2 text-danger"), "Missed Check-Out Details"], className="fw-bold border-bottom"), 
@@ -76,7 +69,7 @@ layout = dbc.Container([
         ], className="shadow-sm border-0 h-100"), width=6),
     ], className="mb-4"),
 
-    # 4. MASTER DATA ANOMALY TABLES
+    # --- 4. MASTER DATA ANOMALY TABLES (Driven by Supervisor Scope) ---
     dbc.Row([
         dbc.Col(dbc.Card([
             dbc.CardHeader("Employees without Skills", className="fw-bold border-bottom"), 
@@ -107,8 +100,13 @@ layout = dbc.Container([
 # CALLBACKS
 # ---------------------------------------------------------
 
-@callback(Output('anom-status-widget', 'children'), Input('user-context-store', 'data'))
-def update_anomaly_widget(user_data):
+# 1. WIDGET UPDATE
+@callback(
+    Output('anomaly-status-widget', 'children'), 
+    [Input('user-context-store', 'data'),
+     Input('anomaly-date', 'date')]
+)
+def update_anomaly_widget(user_data, selected_date):
     # --- GUARD CLAUSE ---
     if user_data is None: 
         return dash.no_update
@@ -116,59 +114,31 @@ def update_anomaly_widget(user_data):
     
     emp_name = user_data.get('emp_name', 'Unknown')
     contractor = user_data.get('contractor_name', None)
+    date_display = str(selected_date) if selected_date else "Select Date"
     
-    # Use 'Select Date' as placeholder since this page uses a complex filter
-    return create_user_status_widget(emp_name, contractor, "Date Filter")
+    return create_user_status_widget(emp_name, contractor, date_display)
 
-@callback([Output('div-date-range', 'style'), Output('div-date-single', 'style')], Input('date-mode-radio', 'value'))
-def toggle_date_mode(mode):
-    if mode == 'single': return {'display': 'none'}, {'display': 'block'}
-    return {'display': 'block'}, {'display': 'none'}
-
+# --- SUPERVISOR KPI CALLBACK ---
 @callback(
-    Output("kpi-present", "children"),
-    [Input('anom-date', 'start_date'), Input('anom-date', 'end_date'),
-     Input('anom-date-single', 'date'), Input('date-mode-radio', 'value'),
-     Input('user-context-store', 'data')]
+    Output('anomaly-kpi-supervisor-count', 'children'), 
+    [Input('anomaly-date', 'date'), Input('user-context-store', 'data')]
 )
-def update_kpi_present(start_range, end_range, single_date, mode, user_data):
+def update_md_supervisor_kpi(selected_date, user_data):
     # --- GUARD CLAUSE ---
-    if user_data is None: return "0"
+    if user_data is None: 
+        return "0 / 0"
     # --------------------
-
-    plant_id = user_data.get('plant_id')
-    company_id = user_data.get('company_id')
-    contractor_id = user_data.get('contractor_id')
-    supervisor_id = user_data.get('empid') # NEW: Fetch Supervisor ID
-
-    start_date = single_date if mode == 'single' else start_range
-    end_date = single_date if mode == 'single' else end_range
-
-    conditions = ["e.active = true"]
-    if company_id: conditions.append(f"e.company_id = {company_id}")
-    if plant_id: conditions.append(f"e.plant_id = {plant_id}")
-    if contractor_id: conditions.append(f"e.contractor_id = {contractor_id}")
     
-    # NEW: Filter by Supervisor
-    if supervisor_id: conditions.append(f"e.parent_id = {supervisor_id}")
-    
-    date_cond = f"AND DATE(a.check_in) >= '{start_date}' AND DATE(a.check_in) <= '{end_date}'" if start_date and end_date else ""
-    join_sql = f"AND {' AND '.join(conditions)}"
-    
-    q_present = f"SELECT COUNT(DISTINCT a.employee_id) FROM hr_attendance a LEFT JOIN hr_employee e ON a.employee_id = e.id WHERE 1=1 {date_cond} {join_sql}"
+    supervisor_id = user_data.get('empid')
+    return get_supervisor_counts(supervisor_id, selected_date)
 
-    try:
-        present = pd.read_sql(q_present, db_connection).iloc[0, 0]
-        return str(present)
-    except: return "0"
-
+# 2. ATTENDANCE ANOMALIES (Missed Punch / Multi Punch)
 @callback(
     [Output('tbl-missed', 'children'), Output('tbl-multi', 'children')],
-    [Input('anom-date', 'start_date'), Input('anom-date', 'end_date'),
-     Input('anom-date-single', 'date'), Input('date-mode-radio', 'value'),
+    [Input('anomaly-date', 'date'),
      Input('user-context-store', 'data')]
 )
-def update_attendance_tables(start_range, end_range, single_date, mode, user_data):
+def update_attendance_tables(selected_date, user_data):
     # --- GUARD CLAUSE ---
     if user_data is None: 
         return html.Div("Loading..."), html.Div("Loading...")
@@ -179,9 +149,6 @@ def update_attendance_tables(start_range, end_range, single_date, mode, user_dat
     contractor_id = user_data.get('contractor_id')
     supervisor_id = user_data.get('empid') # NEW: Fetch Supervisor ID
 
-    start_date = single_date if mode == 'single' else start_range
-    end_date = single_date if mode == 'single' else end_range
-
     conditions = ["e.active = true"]
     if company_id: conditions.append(f"e.company_id = {company_id}")
     if plant_id: conditions.append(f"e.plant_id = {plant_id}")
@@ -190,9 +157,11 @@ def update_attendance_tables(start_range, end_range, single_date, mode, user_dat
     # NEW: Filter by Supervisor
     if supervisor_id: conditions.append(f"e.parent_id = {supervisor_id}")
     
-    date_cond = f"AND DATE(a.check_in) >= '{start_date}' AND DATE(a.check_in) <= '{end_date}'" if start_date and end_date else ""
+    # SINGLE DATE FILTER
+    date_cond = f"AND DATE(a.check_in) = '{selected_date}'" if selected_date else "AND 1=0"
     join_sql = f"AND {' AND '.join(conditions)}"
 
+    # Query 1: Missed Check-out (On selected date)
     q_missed = f"""
         SELECT DATE(a.check_in) as "Date", e.name as "Name", e.employee_code as "Employee Code" 
         FROM hr_attendance a LEFT JOIN hr_employee e ON a.employee_id = e.id 
@@ -200,6 +169,7 @@ def update_attendance_tables(start_range, end_range, single_date, mode, user_dat
         ORDER BY a.check_in DESC LIMIT 50
     """
     
+    # Query 2: Multiple Check-ins (On selected date)
     q_multi = f"""
         SELECT DATE(a.check_in) as "Date", e.name as "Name", e.employee_code as "Employee Code", COUNT(*) as "Count"
         FROM hr_attendance a LEFT JOIN hr_employee e ON a.employee_id = e.id 
@@ -213,13 +183,14 @@ def update_attendance_tables(start_range, end_range, single_date, mode, user_dat
         try:
             df = pd.read_sql(query, db_connection)
             if df.empty: return dbc.Alert("No anomalies found.", color="success")
-            
+            # Using simple Bootstrap table
             table = dbc.Table.from_dataframe(df, striped=True, bordered=True, hover=True, size='sm') 
             return table
         except Exception as e: return dbc.Alert(f"Error: {e}", color="danger")
 
     return make_table(q_missed), make_table(q_multi)
 
+# 3. MASTER DATA ANOMALIES (Static, filtered by Supervisor)
 @callback(
     [Output('tbl-skills', 'children'), Output('tbl-contractor', 'children'),
      Output('tbl-desig', 'children'), Output('tbl-dept', 'children')],
@@ -270,5 +241,6 @@ def update_master_tables(user_data):
         except: return dbc.Alert("Error", color="danger")
 
     return get_table("skills_status IS NULL"), get_table("contractor_id IS NULL"), get_table("job_id IS NULL"), get_table("department_id IS NULL")
+
 
 
