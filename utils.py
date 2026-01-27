@@ -7,10 +7,9 @@ import calendar
 # ---------------------------------------------------------
 # 1. DATABASE CONNECTION
 # ---------------------------------------------------------
-db_connection_str = 'postgresql://lumaxuat:lumaxuat@4.247.149.0:9832/lumaxuat'
+# Using the Production connection string and Azure-optimized pooling
+db_connection_str = 'postgresql://lumaxprod:lumaxprod@4.213.103.83:9832/lumax'
 
-# UPDATED ENGINE CONFIGURATION
-# Added pooling to prevent connection drops on Azure
 db_connection = create_engine(
     db_connection_str,
     pool_pre_ping=True,    
@@ -67,14 +66,10 @@ def decimal_to_time_str(val):
     return f"{hours}h {minutes}m"
 
 # ---------------------------------------------------------
-# 4. COMMON SQL BUILDER (UPDATED)
+# 4. COMMON SQL BUILDER
 # ---------------------------------------------------------
 
 def build_base_query(plant_id, company_id, emp_type, contractor_id=None, supervisor_id=None):
-    """
-    Constructs standard WHERE clauses.
-    UPDATED: Now accepts 'supervisor_id' to filter by parent_id.
-    """
     conditions = ["e.active = true"] 
     joins = "LEFT JOIN hr_employee e ON a.employee_id = e.id"
     
@@ -82,35 +77,42 @@ def build_base_query(plant_id, company_id, emp_type, contractor_id=None, supervi
     if plant_id: conditions.append(f"e.plant_id = {plant_id}")
     if emp_type: conditions.append(f"LOWER(e.employee_type) = LOWER('{emp_type}')")
     if contractor_id: conditions.append(f"e.contractor_id = {contractor_id}")
-    
-    # NEW: Supervisor Logic
     if supervisor_id: conditions.append(f"e.parent_id = {supervisor_id}")
 
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
     return joins, where_clause
 
 # ---------------------------------------------------------
-# 5. NEW: SUPERVISOR KPI HELPER
+# 5. SUPERVISOR KPI HELPER (Preserving Local Filter Logic)
 # ---------------------------------------------------------
 
-def get_supervisor_counts(supervisor_id, selected_date):
+def get_supervisor_counts(supervisor_id, selected_date, company_id=None, plant_id=None, contractor_id=None):
     """
-    Returns string "Present / Total" for a specific supervisor and date.
-    Used across Attendance, Mandays, and Anomaly pages.
+    Returns 'Present / Total' for a supervisor, respecting global filters.
     """
     if not supervisor_id: return "0 / 0"
+    
     try:
-        # 1. Total Active Employees under this Supervisor
-        q_total = f"SELECT COUNT(id) FROM hr_employee WHERE parent_id = {supervisor_id} AND active = true"
+        # Build Filter Conditions (Applied to both Total and Present queries)
+        conds = [f"parent_id = {supervisor_id}", "active = true"]
+        
+        if company_id: conds.append(f"company_id = {company_id}")
+        if plant_id: conds.append(f"plant_id = {plant_id}")
+        if contractor_id: conds.append(f"contractor_id = {contractor_id}")
+        
+        where_sql = " AND ".join(conds)
+
+        # 1. Total Active Employees
+        q_total = f"SELECT COUNT(id) FROM hr_employee WHERE {where_sql}"
         total_count = pd.read_sql(q_total, db_connection).iloc[0, 0]
 
-        # 2. Present Employees under this Supervisor on Selected Date
-        # Note: We use 'check_in' date logic here.
+        # 2. Present Employees (Joined for accurate filtering)
         q_present = f"""
             SELECT COUNT(DISTINCT e.id) 
             FROM hr_attendance a 
             JOIN hr_employee e ON a.employee_id = e.id 
-            WHERE e.parent_id = {supervisor_id} AND DATE(a.check_in) = '{selected_date}'
+            WHERE {where_sql.replace('parent_id', 'e.parent_id').replace('company_id', 'e.company_id').replace('plant_id', 'e.plant_id').replace('contractor_id', 'e.contractor_id').replace('active', 'e.active')} 
+            AND DATE(a.check_in) = '{selected_date}'
         """
         present_count = pd.read_sql(q_present, db_connection).iloc[0, 0]
 
