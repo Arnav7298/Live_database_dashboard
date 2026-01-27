@@ -74,6 +74,24 @@ layout = dbc.Container([
 # CALLBACKS
 # ---------------------------------------------------------
 
+# --- DATE PERSISTENCE LOGIC ---
+@callback(
+    Output('global-date-store', 'data', allow_duplicate=True),
+    Input('md-date', 'date'),
+    prevent_initial_call=True
+)
+def sync_date_to_store(local_date):
+    if not local_date: return dash.no_update
+    return local_date
+
+@callback(
+    Output('md-date', 'date'),
+    Input('global-date-store', 'data')
+)
+def load_date_from_store(stored_date):
+    if not stored_date: return dash.no_update
+    return stored_date
+
 # 1. WIDGET UPDATE
 @callback(
     Output('md-status-widget', 'children'), 
@@ -81,30 +99,26 @@ layout = dbc.Container([
      Input('md-date', 'date')]
 )
 def update_mandays_widget(user_data, selected_date):
-    # --- GUARD CLAUSE ---
-    if user_data is None: 
-        return dash.no_update
-    # --------------------
-    
+    if user_data is None: return dash.no_update
     emp_name = user_data.get('emp_name', 'Unknown')
     contractor = user_data.get('contractor_name', None)
     date_display = str(selected_date) if selected_date else "Select Date"
-    
     return create_user_status_widget(emp_name, contractor, date_display)
 
 # --- SUPERVISOR KPI CALLBACK ---
 @callback(Output('md-kpi-supervisor-count', 'children'), 
           [Input('md-date', 'date'), Input('user-context-store', 'data')])
 def update_md_supervisor_kpi(selected_date, user_data):
-    # --- GUARD CLAUSE ---
-    if user_data is None: 
-        return "0 / 0"
-    # --------------------
-
+    if user_data is None: return "0 / 0"
+    
     supervisor_id = user_data.get('empid')
-    return get_supervisor_counts(supervisor_id, selected_date)
+    plant_id = user_data.get('plant_id')
+    company_id = user_data.get('company_id')
+    contractor_id = user_data.get('contractor_id')
 
-# 2. GENERATE TABLE
+    return get_supervisor_counts(supervisor_id, selected_date, company_id, plant_id, contractor_id)
+
+# 2. GENERATE TABLE (UPDATED QUERY)
 @callback(
     [Output('mandays-table-container', 'children'),
      Output('md-data-store', 'data')],
@@ -112,10 +126,7 @@ def update_md_supervisor_kpi(selected_date, user_data):
      Input('user-context-store', 'data')] 
 )
 def update_table(selected_date, user_data):
-    # --- GUARD CLAUSE ---
-    if user_data is None:
-        return html.Div("Loading...", className="text-muted p-3"), []
-    # --------------------
+    if user_data is None: return html.Div("Loading...", className="text-muted p-3"), []
 
     plant_id = user_data.get('plant_id') if user_data else None
     company_id = user_data.get('company_id') if user_data else None
@@ -136,6 +147,7 @@ def update_table(selected_date, user_data):
 
     where_sql = "WHERE " + " AND ".join(conds) if conds else "WHERE 1=1"
 
+    # --- UPDATE: Using assigned_shift_id for accuracy ---
     query = f"""
     SELECT 
         COALESCE(s.name, 'No Shift') as "Shift",
@@ -145,7 +157,7 @@ def update_table(selected_date, user_data):
         EXTRACT(EPOCH FROM (a.check_out - a.check_in))/3600 as worked_hours
     FROM hr_attendance a
     JOIN hr_employee e ON a.employee_id = e.id
-    LEFT JOIN resource_calendar s ON e.resource_calendar_id = s.id 
+    LEFT JOIN resource_calendar s ON a.assigned_shift_id = s.id 
     LEFT JOIN hr_department d ON e.department_id = d.id
     LEFT JOIN hr_job j ON e.job_id = j.id
     {where_sql} {date_cond} AND a.check_out IS NOT NULL
@@ -179,7 +191,7 @@ def update_table(selected_date, user_data):
             Std_Emp=('is_standard', 'sum'),
             Early_Emp=('is_early', 'sum'),
             Extra_Emp=('is_extra', 'sum'),
-            Sum_Extra_Hrs=('val_extra', 'sum'), # This is the raw count of extra hours
+            Sum_Extra_Hrs=('val_extra', 'sum'), 
             Good_Emp=('is_good', 'sum'),
             Sum_Good_Hrs=('val_good', 'sum'), 
             Sum_OT_Hrs=('val_ot', 'sum')
@@ -190,7 +202,7 @@ def update_table(selected_date, user_data):
         grouped['OT_MD'] = (grouped['Sum_OT_Hrs'] / grouped['std_hours']).round(2)
         
         grouped.sort_values(['Shift', 'Department'], inplace=True)
-
+        
         table_header = [
             html.Tr([
                 html.Th("Shift"), html.Th("Department"),
@@ -198,7 +210,7 @@ def update_table(selected_date, user_data):
                 html.Th("Std Hrs Emp"),
                 html.Th("Early Exit"),
                 html.Th("Extra Hrs Emp"),
-                html.Th("Extra Hours"), # NEW COLUMN HEADER
+                html.Th("Extra Hours"), 
                 html.Th("Extra Hrs MD"),
                 html.Th("Good Hrs Emp"),
                 html.Th("Good Hrs MD"),
@@ -215,7 +227,7 @@ def update_table(selected_date, user_data):
                 html.Td(row['Std_Emp']),
                 html.Td(row['Early_Emp']),
                 html.Td(row['Extra_Emp']),
-                html.Td(row['Sum_Extra_Hrs']), # NEW COLUMN DATA
+                html.Td(row['Sum_Extra_Hrs']), 
                 html.Td(row['Extra_MD'], className="fw-bold"),
                 html.Td(row['Good_Emp']),
                 html.Td(row['Good_MD'], className="fw-bold"),
@@ -238,6 +250,7 @@ def download_csv(n, data):
 @callback(Output("md-download-pdf", "data"), Input("md-btn-pdf", "n_clicks"), State("md-data-store", "data"), prevent_initial_call=True)
 def download_pdf(n, data):
     if not n or not data: return dash.no_update
+    
     df = pd.DataFrame(data)
     pdf = FPDF(orientation='L', unit='mm', format='A4')
     pdf.add_page()
