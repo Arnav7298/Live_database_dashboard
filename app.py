@@ -1,7 +1,8 @@
 import dash
-from dash import dcc, html, Input, Output, State, ClientsideFunction
+from dash import dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
 import urllib.parse
+import pandas as pd
 from utils import db_connection 
 
 # 1. Add Fonts
@@ -11,7 +12,6 @@ FONT_AWESOME = "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/al
 app = dash.Dash(
     __name__, 
     use_pages=True, 
-    # Switch to BOOTSTRAP (Neutral Base) to allow CSS Variables to control colors
     external_stylesheets=[dbc.themes.BOOTSTRAP, FONT_AWESOME, FONT_INTER],
     suppress_callback_exceptions=True
 )
@@ -19,10 +19,11 @@ server = app.server
 
 app.layout = dbc.Container([
     dcc.Location(id='url', refresh=False),
-    dcc.Store(id='user-context-store', storage_type='session'),
     
-    # --- STORE FOR THEME PERSISTENCE ---
+    # --- STORES ---
+    dcc.Store(id='user-context-store', storage_type='session'),
     dcc.Store(id='theme-store', data='light'), 
+    dcc.Store(id='global-date-store', storage_type='session'), # Preserved from local
 
     dbc.NavbarSimple(
         children=[
@@ -33,15 +34,15 @@ app.layout = dbc.Container([
             # --- THEME SWITCH ---
             dbc.NavItem(
                 html.Div([
-                    html.I(className="fa-solid fa-sun me-2 text-warning"), # Sun Icon
+                    html.I(className="fa-solid fa-sun me-2 text-warning"), 
                     dbc.Switch(id="theme-switch", value=False, className="d-inline-block align-middle"),
-                    html.I(className="fa-solid fa-moon ms-2 text-secondary"), # Moon Icon
+                    html.I(className="fa-solid fa-moon ms-2 text-secondary"), 
                 ], className="d-flex align-items-center ms-3 me-3 p-2 rounded border border-light")
             ),
         ],
         brand=[html.I(className="fa-solid fa-chart-line me-2"), "HR Dashboard"],
         brand_href="/",
-        color="primary", # Uses CSS Variable --primary-color
+        color="primary", 
         dark=True,
         className="mb-0 shadow-sm"
     ),
@@ -49,7 +50,7 @@ app.layout = dbc.Container([
 ], fluid=True)
 
 
-# --- 1. THEME SWITCHER (Clientside for Instant Swap) ---
+# --- 1. THEME SWITCHER (Clientside) ---
 app.clientside_callback(
     """
     function(value) {
@@ -66,7 +67,7 @@ app.clientside_callback(
     Input('theme-switch', 'value')
 )
 
-# --- 2. GLOBAL LOGIN CALLBACK (Updated to fetch Name) ---
+# --- 2. GLOBAL LOGIN CALLBACK ---
 @app.callback(
     Output('user-context-store', 'data'),
     Input('url', 'search'),
@@ -74,36 +75,33 @@ app.clientside_callback(
 )
 def handle_login(search_str, current_data):
     target_id = None
+    
+    # Check URL for empid
     if search_str:
         try:
             parsed = urllib.parse.parse_qs(search_str.lstrip('?'))
             url_id = parsed.get('empid', [None])[0]
             if url_id: target_id = url_id
-        except: pass
+        except:
+            pass
 
+    # Fallback to Session
     if not target_id and current_data and current_data.get('empid'):
         target_id = current_data['empid']
 
-    if not target_id: return dash.no_update
+    if not target_id: 
+        return {'empid': None, 'emp_name': 'Guest', 'locked': True, 'contractor_name': 'Not Logged In'}
 
     try:
-        import pandas as pd
-        # ADDED: e.name to the query
         query = f"""
-        SELECT 
-            e.id,
-            e.name, 
-            e.company_id, 
-            e.plant_id, 
-            e.contractor_id,
-            c.contractor_name 
-        FROM hr_employee e
-        LEFT JOIN plant_contractor c ON e.contractor_id = c.id
+        SELECT e.id, e.name, e.company_id, e.plant_id, e.contractor_id, c.contractor_name 
+        FROM hr_employee e LEFT JOIN plant_contractor c ON e.contractor_id = c.id
         WHERE e.id = {target_id} AND e.active = true 
         """
         df = pd.read_sql(query, db_connection)
         
-        if df.empty: return dash.no_update
+        if df.empty: 
+            return {'empid': None, 'locked': True}
         
         row = df.iloc[0]
         c_name = row['contractor_name']
@@ -111,22 +109,20 @@ def handle_login(search_str, current_data):
         
         return {
             'empid': target_id,
-            'emp_name': row['name'], # ADDED: Store Name
+            'emp_name': row['name'],
             'company_id': int(row['company_id']) if pd.notnull(row['company_id']) else None,
             'plant_id': int(row['plant_id']) if pd.notnull(row['plant_id']) else None,
             'contractor_id': int(row['contractor_id']) if pd.notnull(row['contractor_id']) else None,
             'contractor_name': display_name,
-            'locked': True
+            'locked': False 
         }
-            
-    except Exception as e:
-        print(f"Login Error: {e}")
-        
-    return dash.no_update
+    except Exception:
+        return {'empid': None, 'locked': True}
 
-# --- CRITICAL: KEPT THE OLD RUNNER FOR AZURE SAFETY ---
+# --- 3. AZURE PRODUCTION RUNNER ---
 if __name__ == '__main__':
     app.run_server(host='0.0.0.0', port=8050, debug=False)
+
 
 
 
