@@ -7,7 +7,6 @@ import calendar
 # ---------------------------------------------------------
 # 1. DATABASE CONNECTION
 # ---------------------------------------------------------
-# Using the Production connection string and Azure-optimized pooling
 db_connection_str = 'postgresql://lumaxprod:lumaxprod@4.213.103.83:9832/lumax'
 
 db_connection = create_engine(
@@ -83,17 +82,18 @@ def build_base_query(plant_id, company_id, emp_type, contractor_id=None, supervi
     return joins, where_clause
 
 # ---------------------------------------------------------
-# 5. SUPERVISOR KPI HELPER (Preserving Local Filter Logic)
+# 5. SUPERVISOR KPI HELPER (UPDATED)
 # ---------------------------------------------------------
 
 def get_supervisor_counts(supervisor_id, selected_date, company_id=None, plant_id=None, contractor_id=None):
     """
-    Returns 'Present / Total' for a supervisor, respecting global filters.
+    Returns ONLY 'Present' count for a supervisor, respecting global filters.
+    Modified to remove the 'Total' count as per requirements.
     """
-    if not supervisor_id: return "0 / 0"
+    if not supervisor_id: return "0"
     
     try:
-        # Build Filter Conditions (Applied to both Total and Present queries)
+        # Build Filter Conditions
         conds = [f"parent_id = {supervisor_id}", "active = true"]
         
         if company_id: conds.append(f"company_id = {company_id}")
@@ -102,11 +102,9 @@ def get_supervisor_counts(supervisor_id, selected_date, company_id=None, plant_i
         
         where_sql = " AND ".join(conds)
 
-        # 1. Total Active Employees
-        q_total = f"SELECT COUNT(id) FROM hr_employee WHERE {where_sql}"
-        total_count = pd.read_sql(q_total, db_connection).iloc[0, 0]
+        # NOTE: 'Total' query removed for optimization since it is no longer displayed.
 
-        # 2. Present Employees (Joined for accurate filtering)
+        # Present Employees Query
         q_present = f"""
             SELECT COUNT(DISTINCT e.id) 
             FROM hr_attendance a 
@@ -116,9 +114,9 @@ def get_supervisor_counts(supervisor_id, selected_date, company_id=None, plant_i
         """
         present_count = pd.read_sql(q_present, db_connection).iloc[0, 0]
 
-        return f"{present_count} / {total_count}"
+        return str(present_count)
     except:
-        return "0 / 0"
+        return "0"
 
 # ---------------------------------------------------------
 # 6. DATE & MATH HELPERS
